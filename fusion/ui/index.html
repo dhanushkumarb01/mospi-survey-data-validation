@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>MoSPI · Survey Data Validation</title>
+<meta name="description" content="Intelligent Survey Data Validation Platform — supervisor review workspace for PLFS (HSD, NSO, MoSPI).">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23f15d4d'/%3E%3Cpath d='M9 22V10h3v12zm6 0V14h3v8zm6 0v-5h3v5z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preload" href="/assets/fonts/bebas-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/fonts/intertight-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/styles.css?v=20261006-r4">
+</head>
+<body>
+<header class="appbar" id="appbar">
+  <div class="appbar-inner">
+    <a class="brand" href="#/overview" aria-label="MoSPI survey data validation — overview">
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 18V7h2.6v11zm5.7 0V10.5h2.6V18zm5.7 0v-4.6H19V18z"/></svg></span>
+      <span class="brand-text"><strong>MoSPI</strong><small>Survey data validation</small></span>
+    </a>
+    <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-controls="menu" aria-label="Menu"><span></span><span></span></button>
+    <div class="menu" id="menu">
+      <nav id="nav" aria-label="Main">
+        <a href="#/overview" data-route="overview"><span class="ico" data-icon="overview"></span><span>Overview</span></a>
+        <a href="#/cases" data-route="cases"><span class="ico" data-icon="cases"></span><span>Cases to review</span></a>
+        <a href="#/groups" data-route="groups"><span class="ico" data-icon="groups"></span><span>Group alerts</span></a>
+        <a href="#/areas" data-route="areas"><span class="ico" data-icon="areas"></span><span>Area trends</span></a>
+        <a href="#/reviewed" data-route="reviewed"><span class="ico" data-icon="reviewed"></span><span>Reviewed cases</span></a>
+        <span class="nav-divider" aria-hidden="true"></span>
+        <a href="#/technical" data-route="technical" class="nav-secondary" title="Technical reference"><span class="ico" data-icon="technical"></span><span class="nav-label">Technical reference</span></a>
+      </nav>
+      <div class="appbar-tools">
+        <label class="round-pick" title="Survey round"><span class="sr">Survey round</span><span class="ico" data-icon="layers"></span><select id="runSelect" aria-label="Survey round"></select></label>
+        <label class="who" title="Your name is recorded with each decision in the audit trail"><span class="avatar" id="avatar" aria-hidden="true">?</span><input id="reviewer" placeholder="Your name" autocomplete="name" aria-label="Reviewing as"></label>
+      </div>
+    </div>
+  </div>
+</header>
+<main class="shell">
+  <div id="notice" class="notice hidden" role="status"></div>
+  <section id="app" aria-live="polite"><div class="loading"><span class="spinner"></span>Loading…</div></section>
+</main>
+<footer class="site-foot">
+  <div class="foot-inner">
+    <div class="wordmark" aria-hidden="true">MoSPI</div>
+    <div class="foot-cols">
+      <div class="foot-about">
+        <p class="foot-lead">Intelligent Survey Data Validation Platform</p>
+        <p>Runs locally on this computer. Every figure comes from stored PLFS validation runs.</p>
+      </div>
+      <div><h4>Review</h4><a href="#/overview">Overview</a><a href="#/cases">Cases to review</a><a href="#/reviewed">Reviewed cases</a></div>
+      <div><h4>Context</h4><a href="#/groups">Group alerts</a><a href="#/areas">Area trends</a></div>
+      <div><h4>Reference</h4><a href="#/technical">Technical reference</a></div>
+    </div>
+    <div class="foot-base">
+      <p class="foot-tag">Decisions are kept in an append-only audit trail. Survey data are never changed.</p>
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 18V7h2.6v11zm5.7 0V10.5h2.6V18zm5.7 0v-4.6H19V18z"/></svg></span>
+    </div>
+    <div class="foot-legal">
+      <span>MoSPI · Survey data validation · PLFS</span>
+      <span class="powered">Powered by <b>INNODATATICS</b></span>
+    </div>
+  </div>
+</footer>
+<script src="/assets/app.js?v=20261006-r5"></script>
+</body>
+</html>

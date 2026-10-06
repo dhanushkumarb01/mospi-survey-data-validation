@@ -1,0 +1,21 @@
+# Optional override for Linux hosts: read stored runs directly from
+# MOSPI_DATA_DIR on the host (native speed on Linux; slow through Docker
+# Desktop file sharing on Windows/macOS) instead of the "mospi-data" volume.
+#
+#   MOSPI_DATA_DIR=/srv/mospi-data MOSPI_UID=$(id -u) MOSPI_GID=$(id -g) \
+#     docker compose -f docker-compose.yml -f docker-compose.bind.yml up -d
+#
+# fusion/runs must be writable by MOSPI_UID (review audit trails).
+services:
+  app:
+    user: "${MOSPI_UID:-10001}:${MOSPI_GID:-10001}"
+    volumes:
+      - {type: bind, source: "${MOSPI_DATA_DIR:?set MOSPI_DATA_DIR}/preprocessing/runs", target: /data/preprocessing/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/statistical/runs", target: /data/statistical/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/contextual/runs", target: /data/contextual/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/ml/runs", target: /data/ml/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/pattern/runs", target: /data/pattern/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/historical/runs", target: /data/historical/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/integrity/runs", target: /data/integrity/runs, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/evaluation/results", target: /data/evaluation/results, read_only: true}
+      - {type: bind, source: "${MOSPI_DATA_DIR}/fusion/runs", target: /data/fusion/runs}

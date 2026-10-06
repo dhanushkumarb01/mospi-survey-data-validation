@@ -1,0 +1,72 @@
+# --- Survey data (PLFS unit-level microdata; never committed) ---
+/2023-June2024/
+/Jan-Dec2024/
+/Post2025/
+*.csv
+*.zip
+*.parquet
+*.feather
+*.xlsx
+*.xls
+*.sav
+*.dta
+
+# --- Generated runs, audit trails, exported bundles ---
+**/runs/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+/serving-data/
+/export/
+/exports/
+
+# --- Secrets and local configuration ---
+.env
+.env.*
+!.env.example
+users*.json
+*.key
+*.p12
+*.pfx
+*.pem
+# Empty placeholder required by docker-compose.yml (build secret default).
+!deploy/no-extra-ca.pem
+
+# --- Python environments and caches ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# --- Media and large binaries (design reference video, office docs) ---
+*.mp4
+*.mov
+*.docx
+*.pdf
+
+# --- Editors, OS, tooling ---
+.vscode/
+.idea/
+.claude/
+*.swp
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
+
+# --- Exploratory notebooks (outputs embed local paths; not needed to deploy) ---
+/EDA/

@@ -1,0 +1,26 @@
+# Keep survey data, stored runs and development artefacts out of the build context.
+**/runs/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.git/
+.vscode/
+.idea/
+2023-June2024/
+Jan-Dec2024/
+Post2025/
+EDA/
+evaluation/results/
+*.mp4
+*.zip
+*.xlsx
+*.docx
+*.pdf
+*.parquet
+*.sqlite
+*.csv
+users*.json
+deploy/
+docs/
+*.md
+!requirements*.txt

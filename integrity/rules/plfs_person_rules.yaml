@@ -1,0 +1,107 @@
+# PLFS Schedule 10.4 person-level integrity rules.
+#
+# Each rule is a deterministic check that a supervisor or HSD official can read
+# and edit.  Field names are survey CONCEPTS; each release maps concepts to its
+# own CSV columns (integrity/engine.py: concept_columns).  Add a rule by copying
+# a block; supported types: allowed_values, range, required_when,
+# value_when, not_value_when, unique.
+#
+# Only rules stated in supplied PLFS documents are listed.  A violation is a
+# breach of a documented questionnaire rule; it is reported for review and
+# nothing in the survey data is changed.
+version: plfs-person-rules-v1.0
+rules:
+  - id: R01_CWS_STATUS_CODE
+    type: allowed_values
+    field: cws_status
+    values: ["11","12","21","31","41","42","51","61","62","71","72","81","82","91","92","93","94","95","97","98","99"]
+    severity: error
+    message: Current weekly activity status is not a documented code.
+    source: "Code list, Codes for Block 6, item 5"
+
+  - id: R02_AGE_RANGE
+    type: range
+    field: age
+    min: 0
+    max: 120
+    severity: error
+    message: Age is outside 0-120 years.
+    source: "Plausibility bound (not a PLFS-specified limit); age is recorded in completed years (Vol. I Block 4)"
+
+  - id: R03_STATUS_99_ONLY_UNDER_5
+    type: value_when
+    when: {field: age, max: 4}
+    field: cws_status
+    values: ["99"]
+    severity: error
+    message: A person aged under 5 must have activity status 99.
+    source: "Code list, Codes for Block 6 item 5: status 99 for persons age < 5"
+
+  - id: R04_UNDER_5_ONLY_WITH_STATUS_99
+    type: not_value_when
+    when: {field: age, min: 5}
+    field: cws_status
+    values: ["99"]
+    severity: error
+    message: Activity status 99 is recorded for a person aged 5 or more.
+    source: "Code list, Codes for Block 6 item 5: status 99 for persons age < 5"
+
+  - id: R05_SALARIED_EARNINGS_ONLY_FOR_31_71_72
+    type: value_when
+    when: {field: cws_status, not_in: ["31","71","72"]}
+    field: earnings_salaried
+    values: [0]
+    severity: error
+    message: Salaried earnings are recorded although the activity status does not route to Block 6 item 9.
+    source: "Vol. I §3.6.17"
+
+  - id: R06_SELF_EMPLOYMENT_EARNINGS_ONLY_FOR_SELF_EMPLOYED
+    type: value_when
+    when: {field: cws_status, not_in: ["11","12","21","61","62"]}
+    field: earnings_self_employed
+    values: [0]
+    severity: error
+    message: Self-employment earnings are recorded although the activity status does not route to Block 6 item 10.
+    source: "Vol. I §3.6.18"
+
+  - id: R07_HELPER_EARNINGS_ZERO
+    type: value_when
+    when: {field: cws_status, in: ["21"]}
+    field: earnings_self_employed
+    values: [0]
+    severity: error
+    message: Earnings of a helper in a household enterprise must be 0.
+    source: "Vol. I §1.5.26(g), §3.6.18"
+
+  - id: R08_SALARIED_EARNINGS_NOT_NEGATIVE
+    type: range
+    field: earnings_salaried
+    min: 0
+    severity: error
+    message: Salaried earnings are negative; only self-employment earnings may be negative.
+    source: "Vol. I §3.6.17-3.6.18 (negative sign provided for item 10 only)"
+
+  - id: R09_DAY7_HOURS_WITHIN_A_DAY
+    type: range
+    field: day7_hours
+    min: 0
+    max: 24
+    severity: error
+    message: Hours worked on day 7 are outside 0-24.
+    source: "Vol. I §3.6.9 (hours actually worked on a day)"
+
+  - id: R10_NO_WORK_HOURS_FOR_NON_WORKERS
+    type: value_when
+    when: {field: cws_status, in: ["81","82","91","92","93","94","95","97","98","99"]}
+    field: day7_hours
+    values: [0]
+    severity: warning
+    message: Work hours on day 7 are recorded for a person whose current weekly status is not a worker status.
+    source: "Vol. I Box 7 and §3.6.9 (hours relate to work statuses 11-72)"
+
+  - id: R11_UNIQUE_PERSON
+    type: unique
+    fields: [record_key, person_serial]
+    severity: error
+    message: The same household key and person serial occur more than once.
+    source: "Release README common primary key"

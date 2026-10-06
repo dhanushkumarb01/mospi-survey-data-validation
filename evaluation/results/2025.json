@@ -1,0 +1,1443 @@
+{
+  "release": "2025",
+  "states": [
+    "10",
+    "27",
+    "33",
+    "18",
+    "03",
+    "07"
+  ],
+  "months": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "plan": {
+    "per_type": 300,
+    "fabricated_fsus": 30,
+    "seed": 20261003
+  },
+  "injected_by_type": {
+    "scale_x10": 300,
+    "scale_div10": 300,
+    "occupation_miscode": 300,
+    "hours_keying": 300,
+    "status_earnings_rule": 300,
+    "age_status_rule": 300,
+    "duplicate_person": 299,
+    "digit_transposition": 279,
+    "fsu_fabrication": 30
+  },
+  "records": 150649,
+  "pipeline_timing_seconds": {
+    "statistical": 36.5,
+    "contextual": 12.7,
+    "ml": 146.0,
+    "pattern": 173.7,
+    "historical": 49.0,
+    "integrity": 20.4,
+    "fusion": 24.9
+  },
+  "fusion_run": "evaluation\\runs\\2025_injection\\fusion\\runs\\2025_first_visit_eval",
+  "experiments": {
+    "E0 rules only": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.26411513680637433,
+      "roc_auc": 0.6261564339781329,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.40239043824701193,
+        "recall": 0.25483599663582845,
+        "f0_5": 0.3606284218043323,
+        "false_positive_rate": 0.006069966480296215
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.09014869888475836,
+        "recall": 0.2855340622371741,
+        "f0_5": 0.10444225681412662,
+        "false_positive_rate": 0.046219422543855505
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.25777964676198484,
+        "recall": 0.25777964676198484,
+        "f0_5": 0.25777964676198484,
+        "false_positive_rate": 0.011903878708580909
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.0,
+        "duplicate_person": 0.006688963210702341,
+        "hours_keying": 0.0,
+        "occupation_miscode": 0.0033333333333333335,
+        "scale_div10": 0.006666666666666667,
+        "scale_x10": 0.0033333333333333335,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.02867383512544803,
+        "duplicate_person": 0.030100334448160536,
+        "hours_keying": 0.06,
+        "occupation_miscode": 0.04666666666666667,
+        "scale_div10": 0.04666666666666667,
+        "scale_x10": 0.05333333333333334,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.26687847498014294,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.3065236818588025,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.24632352941176472,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.30337078651685395,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.20980392156862746,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.28939828080229224,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.3090128755364807,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.35076252723311546,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E1 statistical": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.2002089783054122,
+      "roc_auc": 0.7718922096362105,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.3711819389110226,
+        "recall": 0.23507148864592095,
+        "f0_5": 0.3326588907403,
+        "false_positive_rate": 0.006386953618711683
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.13913967073818376,
+        "recall": 0.44070647603027757,
+        "f0_5": 0.1612010090444841,
+        "false_positive_rate": 0.04373073628693406
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.31244743481917575,
+        "recall": 0.31244743481917575,
+        "f0_5": 0.31244743481917575,
+        "false_positive_rate": 0.011027105772538123
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.006666666666666667,
+        "digit_transposition": 0.21505376344086022,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.76,
+        "occupation_miscode": 0.013333333333333334,
+        "scale_div10": 0.39,
+        "scale_x10": 0.49333333333333335,
+        "status_earnings_rule": 0.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.13666666666666666,
+        "digit_transposition": 0.5878136200716846,
+        "duplicate_person": 0.033444816053511704,
+        "hours_keying": 0.95,
+        "occupation_miscode": 0.12333333333333334,
+        "scale_div10": 0.8233333333333334,
+        "scale_x10": 0.88,
+        "status_earnings_rule": 0.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.4630659253375695,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.4155495978552279,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.45588235294117646,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.3707865168539326,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5019607843137255,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.4469914040114613,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.4220314735336195,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.4008714596949891,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E2 contextual": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.04665618671626481,
+      "roc_auc": 0.7780068443424114,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.08964143426294821,
+        "recall": 0.0567703952901598,
+        "f0_5": 0.08033801475839088,
+        "false_positive_rate": 0.009246582271651232
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.05682421667551779,
+        "recall": 0.17998317914213624,
+        "f0_5": 0.0658339998769458,
+        "false_positive_rate": 0.04791226875113812
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.07779646761984861,
+        "recall": 0.07779646761984861,
+        "f0_5": 0.07779646761984861,
+        "false_positive_rate": 0.014790484990321776
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.016666666666666666,
+        "digit_transposition": 0.04659498207885305,
+        "duplicate_person": 0.013377926421404682,
+        "hours_keying": 0.023333333333333334,
+        "occupation_miscode": 0.2733333333333333,
+        "scale_div10": 0.02,
+        "scale_x10": 0.06,
+        "status_earnings_rule": 0.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.13,
+        "digit_transposition": 0.2078853046594982,
+        "duplicate_person": 0.046822742474916385,
+        "hours_keying": 0.08666666666666667,
+        "occupation_miscode": 0.62,
+        "scale_div10": 0.14666666666666667,
+        "scale_x10": 0.20333333333333334,
+        "status_earnings_rule": 0.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.16679904686258937,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.19481680071492405,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.1323529411764706,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.16853932584269662,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.16862745098039217,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.166189111747851,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.2117310443490701,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.18518518518518517,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E3 machine learning": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.18082185433238573,
+      "roc_auc": 0.8789319333834764,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.27622841965471445,
+        "recall": 0.17493692178301093,
+        "f0_5": 0.24756010473696738,
+        "false_positive_rate": 0.007351403848358748
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.1808284652150823,
+        "recall": 0.5727502102607233,
+        "f0_5": 0.20949978465514058,
+        "false_positive_rate": 0.04161299242603071
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.26324642556770395,
+        "recall": 0.26324642556770395,
+        "f0_5": 0.26324642556770395,
+        "false_positive_rate": 0.011816201414976631
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.03333333333333333,
+        "digit_transposition": 0.08960573476702509,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.41333333333333333,
+        "occupation_miscode": 0.03,
+        "scale_div10": 0.16,
+        "scale_x10": 0.12333333333333334,
+        "status_earnings_rule": 0.5433333333333333
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.6266666666666667,
+        "digit_transposition": 0.4551971326164875,
+        "duplicate_person": 0.046822742474916385,
+        "hours_keying": 0.9266666666666666,
+        "occupation_miscode": 0.13333333333333333,
+        "scale_div10": 0.7033333333333334,
+        "scale_x10": 0.8133333333333334,
+        "status_earnings_rule": 0.8666666666666667
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5369340746624305,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.613047363717605,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.5625,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.5730337078651685,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5392156862745098,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.5530085959885387,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.575107296137339,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.6274509803921569,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E3h historical": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.22120370585347598,
+      "roc_auc": 0.8001043684251495,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.4707835325365206,
+        "recall": 0.2981497056349874,
+        "f0_5": 0.42192335158295646,
+        "false_positive_rate": 0.005375292538662315
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.15122145512480084,
+        "recall": 0.47897392767031116,
+        "f0_5": 0.17519842490617116,
+        "false_positive_rate": 0.04311699523170411
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.3595458368376787,
+        "recall": 0.3595458368376787,
+        "f0_5": 0.3595458368376787,
+        "false_positive_rate": 0.01027173216610126
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.006666666666666667,
+        "digit_transposition": 0.34408602150537637,
+        "duplicate_person": 0.0033444816053511705,
+        "hours_keying": 0.83,
+        "occupation_miscode": 0.03333333333333333,
+        "scale_div10": 0.51,
+        "scale_x10": 0.66,
+        "status_earnings_rule": 0.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.15666666666666668,
+        "digit_transposition": 0.6917562724014337,
+        "duplicate_person": 0.033444816053511704,
+        "hours_keying": 0.9833333333333333,
+        "occupation_miscode": 0.16,
+        "scale_div10": 0.8933333333333333,
+        "scale_x10": 0.9266666666666666,
+        "status_earnings_rule": 0.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.49007148530579825,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.46648793565683644,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.5294117647058824,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.43820224719101125,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5313725490196078,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.45558739255014324,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.4663805436337625,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.4357298474945534,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E4 statistical + contextual": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.1124836217721011,
+      "roc_auc": 0.8292957212624198,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.22377158034528552,
+        "recall": 0.1417157275021026,
+        "f0_5": 0.20054748869316827,
+        "false_positive_rate": 0.00788421201718475
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.1046202867764206,
+        "recall": 0.3313708999158957,
+        "f0_5": 0.12120839229680673,
+        "false_positive_rate": 0.04548428215901963
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.17493692178301093,
+        "recall": 0.17493692178301093,
+        "f0_5": 0.17493692178301093,
+        "false_positive_rate": 0.013232526927045747
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.02,
+        "digit_transposition": 0.13261648745519714,
+        "duplicate_person": 0.006688963210702341,
+        "hours_keying": 0.4033333333333333,
+        "occupation_miscode": 0.07,
+        "scale_div10": 0.20666666666666667,
+        "scale_x10": 0.29333333333333333,
+        "status_earnings_rule": 0.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.12333333333333334,
+        "digit_transposition": 0.44802867383512546,
+        "duplicate_person": 0.03678929765886288,
+        "hours_keying": 0.6166666666666667,
+        "occupation_miscode": 0.29333333333333333,
+        "scale_div10": 0.5533333333333333,
+        "scale_x10": 0.5866666666666667,
+        "status_earnings_rule": 0.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.3216838760921366,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.34226988382484363,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.39705882352941174,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.34831460674157305,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.296078431372549,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.2722063037249284,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.36623748211731044,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.3202614379084967,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E5 statistical + contextual + ML": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.12864980947905744,
+      "roc_auc": 0.8498910959751891,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.2602921646746348,
+        "recall": 0.1648444070647603,
+        "f0_5": 0.23327779100214235,
+        "false_positive_rate": 0.007513269621166647
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.11736590546999469,
+        "recall": 0.37174095878889823,
+        "f0_5": 0.135974896942103,
+        "false_positive_rate": 0.04483681906778804
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.21152228763666947,
+        "recall": 0.21152228763666947,
+        "f0_5": 0.21152228763666947,
+        "false_positive_rate": 0.012645763500617113
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.023333333333333334,
+        "digit_transposition": 0.0931899641577061,
+        "duplicate_person": 0.0033444816053511705,
+        "hours_keying": 0.4766666666666667,
+        "occupation_miscode": 0.05333333333333334,
+        "scale_div10": 0.16666666666666666,
+        "scale_x10": 0.19,
+        "status_earnings_rule": 0.30666666666666664
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.13666666666666666,
+        "digit_transposition": 0.3978494623655914,
+        "duplicate_person": 0.07357859531772576,
+        "hours_keying": 0.71,
+        "occupation_miscode": 0.2,
+        "scale_div10": 0.5466666666666666,
+        "scale_x10": 0.57,
+        "status_earnings_rule": 0.34
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.33915806195393167,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.40840035746201964,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.4632352941176471,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.5730337078651685,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.36470588235294116,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.32951289398280803,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.36194563662374823,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.3333333333333333,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E6 full hybrid": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.4367415740956092,
+      "roc_auc": 0.8902915684943702,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5391766268260292,
+        "recall": 0.34146341463414637,
+        "f0_5": 0.4832182813615805,
+        "false_positive_rate": 0.004680618597028414
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.1891927774827403,
+        "recall": 0.5992430613961311,
+        "f0_5": 0.21919030332861625,
+        "false_positive_rate": 0.04118809477240998
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.4087468460891506,
+        "recall": 0.4087468460891506,
+        "f0_5": 0.4087468460891506,
+        "false_positive_rate": 0.009482636523662753
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.06093189964157706,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.38333333333333336,
+        "occupation_miscode": 0.03333333333333333,
+        "scale_div10": 0.11,
+        "scale_x10": 0.12333333333333334,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.44086021505376344,
+        "duplicate_person": 0.06688963210702341,
+        "hours_keying": 0.7866666666666666,
+        "occupation_miscode": 0.18333333333333332,
+        "scale_div10": 0.6233333333333333,
+        "scale_x10": 0.68,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5710881652104846,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.6309204647006256,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.6544117647058824,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6966292134831461,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5078431372549019,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.5444126074498568,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.6180257510729614,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.6623093681917211,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E6 full hybrid, no override": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.42114858152933876,
+      "roc_auc": 0.8888732009414332,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5285524568393094,
+        "recall": 0.3347350714886459,
+        "f0_5": 0.4736967388716972,
+        "false_positive_rate": 0.00478852911223368
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.1853425385023898,
+        "recall": 0.5870479394449117,
+        "f0_5": 0.21472958838368303,
+        "false_positive_rate": 0.04138368258121952
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.3860386879730866,
+        "recall": 0.3860386879730866,
+        "f0_5": 0.3860386879730866,
+        "false_positive_rate": 0.009846834512480526
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.07526881720430108,
+        "duplicate_person": 0.016722408026755852,
+        "hours_keying": 0.17,
+        "occupation_miscode": 0.016666666666666666,
+        "scale_div10": 0.13666666666666666,
+        "scale_x10": 0.24333333333333335,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.45878136200716846,
+        "duplicate_person": 0.07357859531772576,
+        "hours_keying": 0.6733333333333333,
+        "occupation_miscode": 0.15666666666666668,
+        "scale_div10": 0.6366666666666667,
+        "scale_x10": 0.6866666666666666,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5440826052422557,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.6353887399463807,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.6433823529411765,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6853932584269663,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.492156862745098,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.5300859598853869,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.6008583690987125,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.6623093681917211,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E7 full minus statistical": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.3926952931033788,
+      "roc_auc": 0.886888752716276,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.48339973439575035,
+        "recall": 0.30613961312026916,
+        "f0_5": 0.433230183289693,
+        "false_positive_rate": 0.005247148801856061
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.16808284652150823,
+        "recall": 0.5323801513877208,
+        "f0_5": 0.19473328000984436,
+        "false_positive_rate": 0.04226045551726231
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.3616484440706476,
+        "recall": 0.3616484440706476,
+        "f0_5": 0.3616484440706476,
+        "false_positive_rate": 0.010238010130099616
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.05734767025089606,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.21666666666666667,
+        "occupation_miscode": 0.04,
+        "scale_div10": 0.07,
+        "scale_x10": 0.04666666666666667,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.3942652329749104,
+        "duplicate_person": 0.06020066889632107,
+        "hours_keying": 0.5833333333333334,
+        "occupation_miscode": 0.20333333333333334,
+        "scale_div10": 0.48,
+        "scale_x10": 0.5266666666666666,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5003971405877681,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.5683646112600537,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.5772058823529411,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6292134831460674,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.42745098039215684,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.4670487106017192,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.5622317596566524,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.6078431372549019,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E7 full minus contextual": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.49818905668253616,
+      "roc_auc": 0.8849790942379114,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5670650730411687,
+        "recall": 0.35912531539108494,
+        "f0_5": 0.5082123303975244,
+        "false_positive_rate": 0.004397353494614591
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.21494954859267126,
+        "recall": 0.6808242220353238,
+        "f0_5": 0.24903094813265242,
+        "false_positive_rate": 0.03987967977554613
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.5033641715727503,
+        "recall": 0.5033641715727503,
+        "f0_5": 0.5033641715727503,
+        "false_positive_rate": 0.007965144903588699
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.06810035842293907,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.45666666666666667,
+        "occupation_miscode": 0.016666666666666666,
+        "scale_div10": 0.15,
+        "scale_x10": 0.16,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.5878136200716846,
+        "duplicate_person": 0.05016722408026756,
+        "hours_keying": 0.9766666666666667,
+        "occupation_miscode": 0.09333333333333334,
+        "scale_div10": 0.8233333333333334,
+        "scale_x10": 0.9066666666666666,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.6735504368546466,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.6890080428954424,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.6948529411764706,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.7078651685393258,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.6627450980392157,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.6532951289398281,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.6752503576537912,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.7167755991285403,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E7 full minus ml": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.45917155683229227,
+      "roc_auc": 0.889526052751622,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5790172642762285,
+        "recall": 0.3666947014297729,
+        "f0_5": 0.5189240656986431,
+        "false_positive_rate": 0.004275954165008667
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.19423791821561337,
+        "recall": 0.6152228763666947,
+        "f0_5": 0.225035378084046,
+        "false_positive_rate": 0.040931807298797473
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.432296047098402,
+        "recall": 0.432296047098402,
+        "f0_5": 0.432296047098402,
+        "false_positive_rate": 0.009104949720444322
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.1003584229390681,
+        "duplicate_person": 0.0033444816053511705,
+        "hours_keying": 0.37333333333333335,
+        "occupation_miscode": 0.04666666666666667,
+        "scale_div10": 0.14333333333333334,
+        "scale_x10": 0.24666666666666667,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.5376344086021505,
+        "duplicate_person": 0.030100334448160536,
+        "hours_keying": 0.74,
+        "occupation_miscode": 0.23,
+        "scale_div10": 0.6566666666666666,
+        "scale_x10": 0.72,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5758538522637013,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.6595174262734584,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.6654411764705882,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6741573033707865,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5235294117647059,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.5444126074498568,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.6466380543633763,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.681917211328976,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E7 full minus historical": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.4205114974397325,
+      "roc_auc": 0.8889008748494469,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5391766268260292,
+        "recall": 0.34146341463414637,
+        "f0_5": 0.4832182813615805,
+        "false_positive_rate": 0.004680618597028414
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.17485395645246946,
+        "recall": 0.5538267451640033,
+        "f0_5": 0.20257798560265797,
+        "false_positive_rate": 0.041916490750045526
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.3952901597981497,
+        "recall": 0.3952901597981497,
+        "f0_5": 0.3952901597981497,
+        "false_positive_rate": 0.009698457554073284
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.06093189964157706,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.38333333333333336,
+        "occupation_miscode": 0.03333333333333333,
+        "scale_div10": 0.11,
+        "scale_x10": 0.12333333333333334,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.3763440860215054,
+        "duplicate_person": 0.06688963210702341,
+        "hours_keying": 0.7,
+        "occupation_miscode": 0.19333333333333333,
+        "scale_div10": 0.52,
+        "scale_x10": 0.56,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5313741064336776,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.579088471849866,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.5919117647058824,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6067415730337079,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.45294117647058824,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.504297994269341,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.5894134477825465,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.616557734204793,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E7 full minus rules": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.1400889813530273,
+      "roc_auc": 0.8473175558297802,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.2649402390438247,
+        "recall": 0.16778805719091675,
+        "f0_5": 0.2374434658414663,
+        "false_positive_rate": 0.007466058770764344
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.13356346255974508,
+        "recall": 0.42304457527333894,
+        "f0_5": 0.15474066326216696,
+        "false_positive_rate": 0.044014001389347884
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.2232968881412952,
+        "recall": 0.2232968881412952,
+        "f0_5": 0.2232968881412952,
+        "false_positive_rate": 0.012456920099007897
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 0.02,
+        "digit_transposition": 0.1003584229390681,
+        "duplicate_person": 0.0033444816053511705,
+        "hours_keying": 0.48,
+        "occupation_miscode": 0.05,
+        "scale_div10": 0.16,
+        "scale_x10": 0.21666666666666667,
+        "status_earnings_rule": 0.30666666666666664
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 0.11,
+        "digit_transposition": 0.46236559139784944,
+        "duplicate_person": 0.07023411371237458,
+        "hours_keying": 0.82,
+        "occupation_miscode": 0.18666666666666668,
+        "scale_div10": 0.6433333333333333,
+        "scale_x10": 0.7,
+        "status_earnings_rule": 0.3933333333333333
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.3780778395552025,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.4736371760500447,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.5220588235294118,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6404494382022472,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.4196078431372549,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.3839541547277937,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.41201716738197425,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.37254901960784315,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    },
+    "E6 operational queue (risk x influence)": {
+      "records": 150649,
+      "injected": 2378,
+      "average_precision": 0.46303254739960686,
+      "roc_auc": 0.8766096734573016,
+      "chance_average_precision": 0.015785036741033792,
+      "at_1pct": {
+        "k": 1506,
+        "precision": 0.5962815405046481,
+        "recall": 0.3776282590412111,
+        "f0_5": 0.5343965722447036,
+        "false_positive_rate": 0.004100599577800109
+      },
+      "at_5pct": {
+        "k": 7532,
+        "precision": 0.19065321295804566,
+        "recall": 0.6038687973086627,
+        "f0_5": 0.22088229865255643,
+        "false_positive_rate": 0.04111390629320636
+      },
+      "at_k_eq_injected": {
+        "k": 2378,
+        "precision": 0.43692178301093354,
+        "recall": 0.43692178301093354,
+        "f0_5": 0.43692178301093354,
+        "false_positive_rate": 0.009030761241240701
+      },
+      "recall_by_error_type_at_1pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.16845878136200718,
+        "duplicate_person": 0.0,
+        "hours_keying": 0.14666666666666667,
+        "occupation_miscode": 0.03333333333333333,
+        "scale_div10": 0.13,
+        "scale_x10": 0.5266666666666666,
+        "status_earnings_rule": 1.0
+      },
+      "recall_by_error_type_at_5pct": {
+        "age_status_rule": 1.0,
+        "digit_transposition": 0.5627240143369175,
+        "duplicate_person": 0.020066889632107024,
+        "hours_keying": 0.63,
+        "occupation_miscode": 0.15666666666666668,
+        "scale_div10": 0.57,
+        "scale_x10": 0.8866666666666667,
+        "status_earnings_rule": 1.0
+      },
+      "recall_at_5pct_by_sector": {
+        "rural": {
+          "recall": 0.5806195393169182,
+          "injected": 1259,
+          "records": 84782
+        },
+        "urban": {
+          "recall": 0.6300268096514745,
+          "injected": 1119,
+          "records": 65867
+        }
+      },
+      "recall_at_5pct_by_state": {
+        "03": {
+          "recall": 0.7022058823529411,
+          "injected": 272,
+          "records": 15355
+        },
+        "07": {
+          "recall": 0.6179775280898876,
+          "injected": 89,
+          "records": 6721
+        },
+        "10": {
+          "recall": 0.5333333333333333,
+          "injected": 510,
+          "records": 43157
+        },
+        "18": {
+          "recall": 0.5816618911174785,
+          "injected": 349,
+          "records": 21415
+        },
+        "27": {
+          "recall": 0.6008583690987125,
+          "injected": 699,
+          "records": 39073
+        },
+        "33": {
+          "recall": 0.6427015250544662,
+          "injected": 459,
+          "records": 24928
+        }
+      }
+    }
+  },
+  "group_level": {
+    "fabricated_fsus": 30,
+    "fsus_assessed": 1923,
+    "recall_notable_q_lt_0_05": 0.5666666666666667,
+    "precision_among_notable": 0.010265700483091788,
+    "notable_fsus": 1656,
+    "false_positive_rate_clean_fsus": 0.5441567065073041,
+    "fabricated_in_top_5pct_of_group_queue": 0.5333333333333333,
+    "member_mean_risk_rank": 0.5003491620111732,
+    "member_vs_all_mean_risk": {
+      "fabricated_fsu_members": 0.45118834064087043,
+      "all_records": 0.43611128883829875
+    }
+  },
+  "runtime_seconds": 578.2
+}

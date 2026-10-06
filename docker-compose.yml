@@ -1,0 +1,101 @@
+# MoSPI survey data validation — review workspace (PLFS).
+#
+#   docker compose build
+#   docker compose --profile seed run --rm seed      # once, and after new runs are produced
+#   docker compose up -d                             # http://127.0.0.1:8000
+#
+# Stored runs live in the named volume "mospi-data" (fast on every host OS).
+# The seed service fills it from MOSPI_DATA_DIR — this repository or a bundle
+# made by scripts/export_serving_data.py — copying only the files the workspace
+# reads and never overwriting files already in the volume, so review audit
+# trails survive a re-seed.  The app mounts stored runs read-only; only
+# fusion/runs is writable (each run keeps its append-only review_audit.sqlite).
+# Full instructions: docs/DOCKER.md.
+name: mospi-survey-validation
+
+x-build: &build
+  context: .
+  target: runtime
+  # Optional CA of a TLS-inspecting proxy/antivirus on the build machine
+  # (MOSPI_EXTRA_CA_FILE); used only while pip downloads packages.
+  secrets: [extra_ca]
+
+x-hardening: &hardening
+  user: "10001:10001"
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  app:
+    build: *build
+    image: mospi-survey-validation:1.0
+    <<: *hardening
+    # Published on this computer only.  To serve a network, put an approved
+    # TLS reverse proxy in front and enable token authentication (docs/DOCKER.md).
+    ports:
+      - "127.0.0.1:${MOSPI_PORT:-8000}:8000"
+    environment:
+      MOSPI_USERS_FILE: ${MOSPI_USERS_FILE_IN_CONTAINER:-}
+    volumes:
+      - {type: volume, source: mospi-data, target: /data/preprocessing/runs, read_only: true, volume: {subpath: preprocessing/runs}}
+      - {type: volume, source: mospi-data, target: /data/statistical/runs, read_only: true, volume: {subpath: statistical/runs}}
+      - {type: volume, source: mospi-data, target: /data/contextual/runs, read_only: true, volume: {subpath: contextual/runs}}
+      - {type: volume, source: mospi-data, target: /data/ml/runs, read_only: true, volume: {subpath: ml/runs}}
+      - {type: volume, source: mospi-data, target: /data/pattern/runs, read_only: true, volume: {subpath: pattern/runs}}
+      - {type: volume, source: mospi-data, target: /data/historical/runs, read_only: true, volume: {subpath: historical/runs}}
+      - {type: volume, source: mospi-data, target: /data/integrity/runs, read_only: true, volume: {subpath: integrity/runs}}
+      - {type: volume, source: mospi-data, target: /data/evaluation/results, read_only: true, volume: {subpath: evaluation/results}}
+      - {type: volume, source: mospi-data, target: /data/fusion/runs, volume: {subpath: fusion/runs}}
+    mem_limit: ${MOSPI_MEM_LIMIT:-3g}
+    restart: unless-stopped
+
+  # One-shot: copy the stored runs the workspace reads into the data volume.
+  seed:
+    profiles: [seed]
+    build: *build
+    image: mospi-survey-validation:1.0
+    <<: *hardening
+    volumes:
+      - ${MOSPI_DATA_DIR:-.}:/source:ro
+      - mospi-data:/data
+    command: ["python", "scripts/export_serving_data.py", "--project-root", "/source", "--output", "/data", "--keep-existing"]
+
+  # Optional: the batch pipeline in the same image, writing new immutable runs
+  # into MOSPI_DATA_DIR on the host (then re-run the seed service), e.g.
+  #   docker compose --profile batch run --rm batch python -m pipeline.run --release 2025 --suffix v2
+  batch:
+    profiles: [batch]
+    build: *build
+    image: mospi-survey-validation:1.0
+    user: "${MOSPI_UID:-10001}:${MOSPI_GID:-10001}"
+    working_dir: /work
+    environment:
+      PYTHONPATH: /app
+      HOME: /tmp
+    volumes:
+      - ${MOSPI_DATA_DIR:-.}:/work
+    mem_limit: ${MOSPI_BATCH_MEM_LIMIT:-6g}
+    command: ["python", "-m", "pipeline.run", "--help"]
+
+  # Optional: the automated test suite inside the image.
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+      secrets: [extra_ca]
+    image: mospi-survey-validation:1.0-test
+    <<: *hardening
+
+volumes:
+  mospi-data:
+
+# Build-time only: CA certificate of a TLS-inspecting proxy/antivirus, if the
+# build machine has one.  The default is an empty file (no extra CA).
+secrets:
+  extra_ca:
+    file: ${MOSPI_EXTRA_CA_FILE:-./deploy/no-extra-ca.pem}
