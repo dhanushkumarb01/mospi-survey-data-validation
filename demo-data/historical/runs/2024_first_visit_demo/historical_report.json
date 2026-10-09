@@ -1,0 +1,92 @@
+{
+  "records": 1152,
+  "record_evidence": {
+    "cws_earnings_salaried": {
+      "TARGET_NOT_APPLICABLE_FOR_STATUS": 569,
+      "ASSESSABLE": 432,
+      "NO_EARLIER_PERIOD_SUPPLIED": 151
+    },
+    "cws_earnings_self_employed": {
+      "TARGET_NOT_APPLICABLE_FOR_STATUS": 1003,
+      "ASSESSABLE": 80,
+      "NO_EARLIER_PERIOD_SUPPLIED": 36,
+      "INSUFFICIENT_HISTORICAL_REFERENCE": 33
+    },
+    "day7_total_hours": {
+      "ASSESSABLE": 574,
+      "TARGET_NOT_APPLICABLE_FOR_STATUS": 287,
+      "NO_EARLIER_PERIOD_SUPPLIED": 219,
+      "INSUFFICIENT_HISTORICAL_REFERENCE": 72
+    },
+    "day7_casual_wage": {
+      "TARGET_NOT_APPLICABLE_FOR_STATUS": 1019,
+      "ASSESSABLE": 62,
+      "INSUFFICIENT_HISTORICAL_REFERENCE": 39,
+      "NO_EARLIER_PERIOD_SUPPLIED": 32
+    }
+  },
+  "same_season": {
+    "cws_earnings_salaried": {
+      "NOT_ASSESSED": 720,
+      "SAME_SEASON_REFERENCE_UNAVAILABLE": 432
+    },
+    "cws_earnings_self_employed": {
+      "NOT_ASSESSED": 1072,
+      "SAME_SEASON_REFERENCE_UNAVAILABLE": 80
+    },
+    "day7_total_hours": {
+      "NOT_ASSESSED": 578,
+      "SAME_SEASON_REFERENCE_UNAVAILABLE": 574
+    },
+    "day7_casual_wage": {
+      "NOT_ASSESSED": 1090,
+      "SAME_SEASON_REFERENCE_UNAVAILABLE": 62
+    }
+  },
+  "periods_in_pool": [
+    "Jan\u2013Mar 2024",
+    "Apr\u2013Jun 2024",
+    "Jul\u2013Sep 2024",
+    "Oct\u2013Dec 2024"
+  ],
+  "aggregate_rows": 120,
+  "aggregate_notable_changes": 0,
+  "aggregate_expected_changes_known_events": 0,
+  "aggregate_change_status": {
+    "DOMAIN_SAMPLE_TOO_SMALL": 72,
+    "NO_EARLIER_PERIOD_SUPPLIED": 30,
+    "TOO_FEW_COMPARABLE_DOMAINS": 18
+  },
+  "median_design_effect": {
+    "lfpr_cws_15plus": 0.4996187066671366,
+    "mean_day7_hours_workers": 1.0593363117822339,
+    "median_salaried_earnings": 0.6732621520876672,
+    "ur_cws_15plus": NaN,
+    "wpr_cws_15plus": 0.4996187066671366
+  },
+  "known_events_loaded": 0,
+  "reference_snapshot": {
+    "file": "reference_snapshot.parquet",
+    "content_sha256": "638223e0a3ed727a5863d0d306e41e8c38b0ff9160f842bf7c74de70fe17f08a",
+    "rows": 1730,
+    "periods": [
+      "Jan\u2013Mar 2024",
+      "Apr\u2013Jun 2024",
+      "Jul\u2013Sep 2024",
+      "Oct\u2013Dec 2024"
+    ],
+    "source_preprocessing_runs": [
+      {
+        "release": "2024",
+        "run_id": "synthetic-prep"
+      }
+    ]
+  },
+  "runtime_seconds": 0.9,
+  "limitations": [
+    "Comparison of each value with past-period peers; nominal rupees are not deflated (no price index has been approved by HSD).",
+    "Aggregate indicators use first-visit records only and are screening values, not official PLFS estimates.",
+    "Design-based standard errors use Taylor linearisation with FSU as PSU within strata (with-replacement approximation; median by Woodruff's method).",
+    "Post-2025 history is limited to earlier 2025 months; January 2025 has no comparable earlier period and same-month-previous-year needs 2026 data."
+  ]
+}

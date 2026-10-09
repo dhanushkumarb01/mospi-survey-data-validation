@@ -1,0 +1,10 @@
+{
+  "run_id": "demo",
+  "release": "2024",
+  "observation": "first_visit",
+  "design_period": "pre_2025",
+  "input_preprocessing_run_id": "synthetic-prep",
+  "rule_set_version": "plfs_household_rules.yaml:plfs-household-rules-v1.0+plfs_person_rules.yaml:plfs-person-rules-v2.0",
+  "rule_set_sha256": "81224abf8c9b0d1492dba0b91ac30b115f98721633612a7d0ca59c1525ae96d7",
+  "rules_path": "C:\\Users\\Dhanush\\OneDrive\\Documents\\INTERNSHIP\\Data_IoSPI\\integrity\\rules"
+}

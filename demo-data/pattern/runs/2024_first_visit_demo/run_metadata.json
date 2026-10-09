@@ -1,0 +1,72 @@
+{
+  "design_period": "pre_2025",
+  "input_prepared_person_path": "C:\\Users\\Dhanush\\AppData\\Local\\Temp\\mospi-demo-g5b6_gqo\\preprocessing\\runs\\2024_first_visit_synthetic-prep\\prepared_persons.parquet",
+  "input_preprocessing_run_id": "synthetic-prep",
+  "observation": "first_visit",
+  "output_files": [
+    "fsu_distribution_shift.parquet",
+    "concentration_evidence.parquet",
+    "heaping_evidence.parquet",
+    "temporal_drift.parquet",
+    "revisit_pattern_evidence.parquet",
+    "fieldwork_evidence.parquet",
+    "pattern_evidence.parquet",
+    "fsu_summary.parquet",
+    "pattern_report.json",
+    "pattern_report.md",
+    "run_metadata.json"
+  ],
+  "parameters": {
+    "categorical_targets": [
+      "cws_status",
+      "principal_occupation_major_group",
+      "principal_industry_division"
+    ],
+    "concentration_metric": "one_sided_binomial_share_inside_reference_iqr",
+    "distribution_metric": "g_test_williams_corrected_minus_log10_p",
+    "duplicate_minimum_common_fields": 15,
+    "duplicate_similarity_threshold": 0.95,
+    "heaping_metric": "one_sided_binomial_share_ending_0_or_5",
+    "heaping_targets": [
+      "age"
+    ],
+    "minimum_fsu_households": 4,
+    "minimum_fsu_population": 10,
+    "minimum_local_dispersion_fsus": 30,
+    "minimum_reference_households": 20,
+    "minimum_reference_pairs": 100,
+    "minimum_reference_population": 30,
+    "minimum_revisit_linked_population": 10,
+    "minimum_temporal_history": 2,
+    "minimum_temporal_population": 10,
+    "minimum_valid_target_population": 10,
+    "multiplicity": "per-check: Benjamini-Hochberg within component and variable; per-FSU: Cauchy combination of the FSU's checks, then Benjamini-Hochberg across FSUs",
+    "notable_q_value": 0.05,
+    "numerical_distance_metric": "mann_whitney_two_sided_minus_log10_p",
+    "numerical_targets": [
+      "day7_total_hours",
+      "cws_earnings_salaried",
+      "cws_earnings_self_employed",
+      "age"
+    ],
+    "ranking_method": "empirical_percentile_of_minus_log10_p_among_assessable_fsus",
+    "status_mix_age_band_width": 10,
+    "status_mix_prior_strength": 1.0,
+    "temporal_targets": [
+      "day7_total_hours",
+      "cws_earnings_salaried",
+      "cws_earnings_self_employed",
+      "age",
+      "cws_status"
+    ]
+  },
+  "pattern_method_version": "plfs-pattern-v2.0",
+  "pattern_specification_version": "plfs-pattern-spec-v2.0",
+  "prepared_household_path": "C:\\Users\\Dhanush\\AppData\\Local\\Temp\\mospi-demo-g5b6_gqo\\preprocessing\\runs\\2024_first_visit_synthetic-prep\\prepared_households.parquet",
+  "processing_timestamp_utc": "2026-10-09T10:59:40+00:00",
+  "release": "2024",
+  "revisit_prepared_person_path": null,
+  "revisit_statistical_run_path": null,
+  "run_id": "demo",
+  "software_version": "0.1.0"
+}

@@ -13,6 +13,7 @@
 
 # --- Generated runs, audit trails, exported bundles ---
 **/runs/
+/pipeline/jobs/
 *.sqlite
 *.sqlite3
 *.db
@@ -70,3 +71,11 @@ desktop.ini
 
 # --- Exploratory notebooks (outputs embed local paths; not needed to deploy) ---
 /EDA/
+
+# --- Vercel ---
+# Local CLI link (project and team ids) and pulled environment files.
+.vercel/
+# The SYNTHETIC demonstration bundle (scripts/build_demo_data.py) is committed so the hosted review-only
+# workspace has data to show. It holds no PLFS record; real or approved data never go in this folder.
+!/demo-data/*/runs/
+!/demo-data/**/*.parquet

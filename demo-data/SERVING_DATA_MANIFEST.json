@@ -1,0 +1,21 @@
+{
+  "source_project": "synthetic delivery (pipeline/tests/synthetic.py)",
+  "fusion_runs": [
+    "fusion/runs/2024_first_visit_demo"
+  ],
+  "source_runs": [
+    "contextual/runs/2024_first_visit_demo",
+    "historical/runs/2024_first_visit_demo",
+    "integrity/runs/2024_first_visit_demo",
+    "ml/runs/2024_first_visit_demo",
+    "pattern/runs/2024_first_visit_demo",
+    "preprocessing/runs/2024_first_visit_synthetic-prep",
+    "statistical/runs/2024_first_visit_demo"
+  ],
+  "missing_source_runs": [],
+  "review_audit_included": false,
+  "existing_files_kept": false,
+  "bytes_copied": 1141949,
+  "synthetic": true,
+  "notice": "Synthetic demonstration data. Every record, household and FSU shown here was generated for testing; none is a PLFS respondent, and the figures say nothing about any real area."
+}

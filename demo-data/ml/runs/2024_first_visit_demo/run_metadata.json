@@ -1,0 +1,43 @@
+{
+  "design_period": "pre_2025",
+  "history_preprocessing_runs": [],
+  "input_prepared_person_path": "C:\\Users\\Dhanush\\AppData\\Local\\Temp\\mospi-demo-g5b6_gqo\\preprocessing\\runs\\2024_first_visit_synthetic-prep\\prepared_persons.parquet",
+  "input_preprocessing_run_id": "synthetic-prep",
+  "ml_method_version": "plfs-ml-v2.1",
+  "model_registry": "model_registry.json",
+  "observation": "first_visit",
+  "outputs": [
+    "conditional_model_evidence.parquet",
+    "similarity_evidence.parquet",
+    "isolation_forest_evidence.parquet",
+    "lof_evidence.parquet",
+    "model_registry.json",
+    "ml_report.json",
+    "ml_report.md",
+    "run_metadata.json"
+  ],
+  "parameters": {
+    "conditional_folds": 2,
+    "conditional_learning_rate": 0.1,
+    "conditional_max_iterations": 500,
+    "conformal_group_minimum": 100,
+    "isolation_max_samples": 1024,
+    "isolation_max_training_rows": 10000,
+    "isolation_trees": 25,
+    "lof_maximum_reference_rows": 1000,
+    "lof_minimum_distinct_points": 21,
+    "lof_minimum_population": 30,
+    "lof_neighbors": 20,
+    "maximum_training_rows": 50000,
+    "minimum_model_population": 50,
+    "run_research_models": true,
+    "similarity_minimum_present_fields": 6
+  },
+  "peer_group_run_id": "demo",
+  "peer_group_run_path": "C:\\Users\\Dhanush\\AppData\\Local\\Temp\\mospi-demo-g5b6_gqo\\peer_groups\\runs\\2024_first_visit_demo",
+  "peer_group_specification_version": "plfs-peer-groups-v1.1",
+  "processing_timestamp_utc": "2026-10-09T10:59:36+00:00",
+  "release": "2024",
+  "run_id": "demo",
+  "software_version": "0.1.0"
+}

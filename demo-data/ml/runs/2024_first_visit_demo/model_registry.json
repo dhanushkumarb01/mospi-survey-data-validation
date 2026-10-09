@@ -1,0 +1,296 @@
+{
+  "models": [
+    {
+      "calibration_rows": 8,
+      "iterations": 31,
+      "model_id": "cm_cws_earnings_salaried_p3_crossfit0",
+      "residual_q05_q95": [
+        -0.38236752926127926,
+        0.45619486197360637
+      ],
+      "scored_period": 3,
+      "scored_records": 63,
+      "scored_records_state_calibrated": 0,
+      "seed": 20261925,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_salaried",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 80,
+      "training_scheme": "IN_ROUND_CROSS_FIT_NO_EARLIER_PERIOD"
+    },
+    {
+      "calibration_rows": 25,
+      "iterations": 20,
+      "model_id": "cm_cws_earnings_salaried_p3_crossfit1",
+      "residual_q05_q95": [
+        0.027867791891997132,
+        0.7573026137006854
+      ],
+      "scored_period": 3,
+      "scored_records": 88,
+      "scored_records_state_calibrated": 0,
+      "seed": 20261926,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_salaried",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 38,
+      "training_scheme": "IN_ROUND_CROSS_FIT_NO_EARLIER_PERIOD"
+    },
+    {
+      "calibration_rows": 33,
+      "iterations": 52,
+      "model_id": "cm_cws_earnings_salaried_p4_9d4915ff513b",
+      "residual_q05_q95": [
+        -0.42638025825742004,
+        0.4388825557918177
+      ],
+      "scored_period": 4,
+      "scored_records": 139,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260929,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_salaried",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 118,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 82,
+      "iterations": 290,
+      "model_id": "cm_cws_earnings_salaried_p5_ad94432ed757",
+      "residual_q05_q95": [
+        -0.6027115394388876,
+        0.47860884351041444
+      ],
+      "scored_period": 5,
+      "scored_records": 156,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260930,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_salaried",
+      "training_periods": [
+        3,
+        4
+      ],
+      "training_rows": 208,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 117,
+      "iterations": 52,
+      "model_id": "cm_cws_earnings_salaried_p6_0dbd186d7b68",
+      "residual_q05_q95": [
+        -0.5154921112573898,
+        0.38322890855556396
+      ],
+      "scored_period": 6,
+      "scored_records": 137,
+      "scored_records_state_calibrated": 137,
+      "seed": 20260931,
+      "states_calibrated_separately": 1,
+      "target": "cws_earnings_salaried",
+      "training_periods": [
+        3,
+        4,
+        5
+      ],
+      "training_rows": 329,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 20,
+      "iterations": 20,
+      "model_id": "cm_cws_earnings_self_employed_p5_8c64a74e1b32",
+      "residual_q05_q95": [
+        -0.4581254866476235,
+        0.24195631251924568
+      ],
+      "scored_period": 5,
+      "scored_records": 42,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260930,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_self_employed",
+      "training_periods": [
+        3,
+        4
+      ],
+      "training_rows": 49,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 33,
+      "iterations": 136,
+      "model_id": "cm_cws_earnings_self_employed_p6_b665b30b0f03",
+      "residual_q05_q95": [
+        -0.6753636043806569,
+        0.40827511405234407
+      ],
+      "scored_period": 6,
+      "scored_records": 38,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260931,
+      "states_calibrated_separately": 0,
+      "target": "cws_earnings_self_employed",
+      "training_periods": [
+        3,
+        4,
+        5
+      ],
+      "training_rows": 78,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 19,
+      "iterations": 20,
+      "model_id": "cm_day7_casual_wage_p5_e08734962653",
+      "residual_q05_q95": [
+        -0.3916163248159365,
+        0.20444348827487724
+      ],
+      "scored_period": 5,
+      "scored_records": 25,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260930,
+      "states_calibrated_separately": 0,
+      "target": "day7_casual_wage",
+      "training_periods": [
+        3,
+        4
+      ],
+      "training_rows": 52,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 25,
+      "iterations": 49,
+      "model_id": "cm_day7_casual_wage_p6_12a83d36aa7d",
+      "residual_q05_q95": [
+        -0.41754496563152566,
+        0.17582889357680098
+      ],
+      "scored_period": 6,
+      "scored_records": 37,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260931,
+      "states_calibrated_separately": 0,
+      "target": "day7_casual_wage",
+      "training_periods": [
+        3,
+        4,
+        5
+      ],
+      "training_rows": 71,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 14,
+      "iterations": 31,
+      "model_id": "cm_day7_total_hours_p3_crossfit0",
+      "residual_q05_q95": [
+        -0.3624573565042737,
+        0.6803004864715801
+      ],
+      "scored_period": 3,
+      "scored_records": 92,
+      "scored_records_state_calibrated": 0,
+      "seed": 20261925,
+      "states_calibrated_separately": 0,
+      "target": "day7_total_hours",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 113,
+      "training_scheme": "IN_ROUND_CROSS_FIT_NO_EARLIER_PERIOD"
+    },
+    {
+      "calibration_rows": 37,
+      "iterations": 29,
+      "model_id": "cm_day7_total_hours_p3_crossfit1",
+      "residual_q05_q95": [
+        -0.27684260660261373,
+        0.7976499858226926
+      ],
+      "scored_period": 3,
+      "scored_records": 127,
+      "scored_records_state_calibrated": 0,
+      "seed": 20261926,
+      "states_calibrated_separately": 0,
+      "target": "day7_total_hours",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 55,
+      "training_scheme": "IN_ROUND_CROSS_FIT_NO_EARLIER_PERIOD"
+    },
+    {
+      "calibration_rows": 51,
+      "iterations": 78,
+      "model_id": "cm_day7_total_hours_p4_90068530dc95",
+      "residual_q05_q95": [
+        -5.168925494558607e-05,
+        0.0003016608405292942
+      ],
+      "scored_period": 4,
+      "scored_records": 211,
+      "scored_records_state_calibrated": 0,
+      "seed": 20260929,
+      "states_calibrated_separately": 0,
+      "target": "day7_total_hours",
+      "training_periods": [
+        3
+      ],
+      "training_rows": 168,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 121,
+      "iterations": 86,
+      "model_id": "cm_day7_total_hours_p5_d1c3dcd70e7d",
+      "residual_q05_q95": [
+        -1.8700781565073044e-05,
+        0.00012192042712300122
+      ],
+      "scored_period": 5,
+      "scored_records": 223,
+      "scored_records_state_calibrated": 223,
+      "seed": 20260930,
+      "states_calibrated_separately": 1,
+      "target": "day7_total_hours",
+      "training_periods": [
+        3,
+        4
+      ],
+      "training_rows": 309,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    },
+    {
+      "calibration_rows": 175,
+      "iterations": 87,
+      "model_id": "cm_day7_total_hours_p6_db80fa8ee73a",
+      "residual_q05_q95": [
+        -1.6469253370843262e-05,
+        0.00010217361322162333
+      ],
+      "scored_period": 6,
+      "scored_records": 212,
+      "scored_records_state_calibrated": 212,
+      "seed": 20260931,
+      "states_calibrated_separately": 1,
+      "target": "day7_total_hours",
+      "training_periods": [
+        3,
+        4,
+        5
+      ],
+      "training_rows": 478,
+      "training_scheme": "TRAINED_ON_EARLIER_PERIODS"
+    }
+  ]
+}

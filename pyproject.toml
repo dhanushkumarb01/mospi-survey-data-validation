@@ -1,0 +1,24 @@
+# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md).  Docker and local installs use requirements.txt,
+# which must list the same pins (checked by fusion/tests/test_deployment.py).
+[project]
+name = "mospi-survey-data-validation"
+version = "2.2.0"
+description = "MoSPI Intelligent Survey Data Validation Platform (PLFS) - review workspace"
+# Vercel's Python runtime offers 3.12+; the stored runs were produced on 3.11 (Dockerfile).  Serving only reads them.
+requires-python = "==3.12.*"
+dependencies = [
+    "pandas==2.2.2",
+    "numpy==1.26.4",
+    "pyarrow==24.0.0",
+    "scipy==1.15.3",
+    "scikit-learn==1.4.2",
+    "duckdb==1.5.5",
+    "PyYAML==6.0.3",
+    "fastapi==0.141.1",
+    "starlette==1.6.0",
+    "pydantic==2.12.4",
+    "uvicorn==0.52.1",
+]
+
+[tool.vercel]
+entrypoint = "fusion.vercel_app:app"

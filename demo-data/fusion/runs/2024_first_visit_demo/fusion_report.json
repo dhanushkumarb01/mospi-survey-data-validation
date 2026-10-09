@@ -1,0 +1,78 @@
+{
+  "burden": {
+    "calibration_by_mechanism": {
+      "p_current": {
+        "observed_over_nominal": 0.0,
+        "rows": 1730
+      },
+      "p_history": {
+        "observed_over_nominal": 0.07534843205574913,
+        "rows": 1148
+      },
+      "p_model": {
+        "observed_over_nominal": 0.05440251572327044,
+        "rows": 1590
+      },
+      "p_reference": {
+        "observed_over_nominal": 0.0,
+        "rows": 1730
+      },
+      "p_variable": {
+        "observed_over_nominal": 0.05,
+        "rows": 1730
+      },
+      "reference_can_attain_threshold_share": 0.0,
+      "threshold": 0.011560693641618497
+    },
+    "check_now_per_1000_by_state": {
+      "07": 0.0
+    },
+    "check_now_state_rate_max_over_median": null,
+    "nominal_value_alerts_per_1000_if_all_clean": 8.680555555555555,
+    "note": "States/UTs with at least 1,000 records; not validated against confirmed errors.",
+    "observed_over_nominal": 0.0,
+    "observed_value_alerts_per_1000": 0.0,
+    "value_threshold": 0.011560693641618497
+  },
+  "check_now_cases": 0,
+  "coverage": {
+    "any_non_rule_check_share": 0.7508680555555556,
+    "coding_check_assessable_share": 0.7508680555555556,
+    "value_check_assessable_share": 0.7508680555555556,
+    "value_variables_assessed_distribution": {
+      "2.0": 865
+    }
+  },
+  "group_alerts": {
+    "LOW": 48
+  },
+  "household_cases": 1,
+  "impact_available": 865,
+  "lane_counts_check_now": {
+    "RULE": 1
+  },
+  "queue": {
+    "budget_cases": 12,
+    "coding_budget": 2,
+    "coding_threshold": 0.0023121387283236996,
+    "discrete_test_correction": true,
+    "per_fsu_cap": 10,
+    "records": 1152,
+    "review_budget_share": 0.01,
+    "tier_b_allowance": 24,
+    "value_budget": 10,
+    "value_threshold": 0.011560693641618497
+  },
+  "records_processed": 1152,
+  "rule_findings": {
+    "households_with_hard_rule": 1,
+    "persons_with_hard_rule": 0
+  },
+  "runtime_seconds": 1.012,
+  "tier_counts": {
+    "A": 1,
+    "B": 13,
+    "NONE": 852,
+    "NOT_ASSESSABLE": 287
+  }
+}

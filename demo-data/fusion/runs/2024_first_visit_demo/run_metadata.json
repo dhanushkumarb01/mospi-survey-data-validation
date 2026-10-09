@@ -1,0 +1,54 @@
+{
+  "design_period": "pre_2025",
+  "fusion_version": "MoSPI-fusion-v2.2-lanes",
+  "input_preprocessing_run_id": "synthetic-prep",
+  "observation": "first_visit",
+  "output_files": [
+    "fused_cases.parquet",
+    "value_evidence.parquet",
+    "impact_domains.parquet",
+    "evidence_cards.parquet",
+    "group_priorities.parquet",
+    "fusion_report.json",
+    "fusion_report.md",
+    "review_audit.sqlite",
+    "run_metadata.json"
+  ],
+  "parameters": {
+    "calibration_version": "finite-sample-tail-probabilities-v2 (LOO peers, out-of-sample history, State-conditional split-conformal model; Tarone count)",
+    "coding_budget_share": 0.1,
+    "discrete_test_correction": true,
+    "evidence_card_capacity": 10000,
+    "fusion_version": "MoSPI-fusion-v2.2-lanes",
+    "group_alert_q": 0.05,
+    "group_strong_q": 0.01,
+    "impact_version": "delta-domain-mean-over-design-se-v1",
+    "per_fsu_cap": 10,
+    "review_budget_share": 0.01,
+    "tier_b_factor": 5.0,
+    "tier_b_multiplier": 2.0,
+    "use_conditional_model": true
+  },
+  "queue": {
+    "budget_cases": 12,
+    "coding_budget": 2,
+    "coding_threshold": 0.0023121387283236996,
+    "discrete_test_correction": true,
+    "per_fsu_cap": 10,
+    "records": 1152,
+    "review_budget_share": 0.01,
+    "tier_b_allowance": 24,
+    "value_budget": 10,
+    "value_threshold": 0.011560693641618497
+  },
+  "release": "2024",
+  "run_id": "demo",
+  "source_runs": {
+    "contextual": "demo",
+    "historical": "demo",
+    "integrity": "demo",
+    "ml": "demo",
+    "pattern": "demo",
+    "statistical": "demo"
+  }
+}

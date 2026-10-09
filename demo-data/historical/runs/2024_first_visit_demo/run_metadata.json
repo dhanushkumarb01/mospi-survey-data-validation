@@ -1,0 +1,50 @@
+{
+  "run_id": "demo",
+  "release": "2024",
+  "observation": "first_visit",
+  "design_period": "pre_2025",
+  "input_preprocessing_run_id": "synthetic-prep",
+  "historical_method_version": "plfs-historical-v2.0",
+  "reference_preprocessing_runs": [
+    {
+      "release": "2024",
+      "run_id": "synthetic-prep"
+    }
+  ],
+  "reference_snapshot": {
+    "file": "reference_snapshot.parquet",
+    "content_sha256": "638223e0a3ed727a5863d0d306e41e8c38b0ff9160f842bf7c74de70fe17f08a",
+    "rows": 1730,
+    "periods": [
+      "Jan\u2013Mar 2024",
+      "Apr\u2013Jun 2024",
+      "Jul\u2013Sep 2024",
+      "Oct\u2013Dec 2024"
+    ],
+    "source_preprocessing_runs": [
+      {
+        "release": "2024",
+        "run_id": "synthetic-prep"
+      }
+    ]
+  },
+  "parameters": {
+    "pre_2025_window_periods": 4,
+    "post_2025_window_periods": 3,
+    "minimum_reference_size": 30,
+    "lower_tail_quantile": 0.05,
+    "upper_tail_quantile": 0.95,
+    "pre_2025_same_season_lag": 4,
+    "minimum_domain_persons": 150,
+    "minimum_domain_earners": 30,
+    "notable_robust_z": 3.5,
+    "notable_change_over_se": 3.0
+  },
+  "output_files": [
+    "historical_record_evidence.parquet",
+    "aggregate_indicators.parquet",
+    "reference_snapshot.parquet",
+    "historical_report.json",
+    "run_metadata.json"
+  ]
+}

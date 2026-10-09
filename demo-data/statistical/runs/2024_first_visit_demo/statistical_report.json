@@ -1,0 +1,164 @@
+{
+  "assessability_rate_percent": 37.54340277777778,
+  "errors": [],
+  "records_assessable": 1730,
+  "records_processed": 4608,
+  "revisit_coverage": {
+    "available": false,
+    "reason": "NO_LINKED_REVISIT_INPUT_FOR_THIS_RUN"
+  },
+  "runtime_seconds": 1.127,
+  "target_summary": [
+    {
+      "assessability_percent": 50.607638888888886,
+      "assessable": 583,
+      "distribution_positions": {
+        "CENTRAL_REFERENCE_RANGE": 519,
+        "LOWER_TAIL": 32,
+        "UPPER_TAIL": 32
+      },
+      "not_assessable": 569,
+      "peer_groups": 8,
+      "percentile_summary": {
+        "25%": 0.25,
+        "5%": 0.04897388059701493,
+        "50%": 0.4934210526315789,
+        "75%": 0.75,
+        "95%": 0.9504099222198864,
+        "count": 583.0,
+        "max": 0.9940476190476191,
+        "mean": 0.5,
+        "min": 0.005952380952380952,
+        "std": 0.2888368405223112
+      },
+      "records": 1152,
+      "robust_deviation_summary": {
+        "25%": -0.6744897501960817,
+        "5%": -1.466983210009011,
+        "50%": 0.0,
+        "75%": 0.6744897501960817,
+        "95%": 2.1021775934569136,
+        "count": 583.0,
+        "max": 28.09051430228387,
+        "mean": 0.14873380366893538,
+        "min": -2.5360814607372673,
+        "std": 1.6107817483989728
+      },
+      "target_variable": "cws_earnings_salaried",
+      "zero_mad_groups": 0
+    },
+    {
+      "assessability_percent": 12.934027777777779,
+      "assessable": 149,
+      "distribution_positions": {
+        "CENTRAL_REFERENCE_RANGE": 134,
+        "LOWER_TAIL": 7,
+        "UPPER_TAIL": 8
+      },
+      "not_assessable": 1003,
+      "peer_groups": 2,
+      "percentile_summary": {
+        "25%": 0.26,
+        "5%": 0.05333333333333334,
+        "50%": 0.5,
+        "75%": 0.75,
+        "95%": 0.9476216216216216,
+        "count": 149.0,
+        "max": 0.9933333333333333,
+        "mean": 0.5,
+        "min": 0.006666666666666667,
+        "std": 0.2895384197041861
+      },
+      "records": 1152,
+      "robust_deviation_summary": {
+        "25%": -0.6245275464778535,
+        "5%": -1.329116477938331,
+        "50%": 0.0,
+        "75%": 0.7244519539143099,
+        "95%": 2.082692740849364,
+        "count": 149.0,
+        "max": 4.524016617168841,
+        "mean": 0.1368705942587018,
+        "min": -1.7931556773505586,
+        "std": 1.1017410897402142
+      },
+      "target_variable": "cws_earnings_self_employed",
+      "zero_mad_groups": 0
+    },
+    {
+      "assessability_percent": 75.08680555555556,
+      "assessable": 865,
+      "distribution_positions": {
+        "CENTRAL_REFERENCE_RANGE": 865
+      },
+      "not_assessable": 287,
+      "peer_groups": 12,
+      "percentile_summary": {
+        "25%": 0.5,
+        "5%": 0.5,
+        "50%": 0.5,
+        "75%": 0.5,
+        "95%": 0.5,
+        "count": 865.0,
+        "max": 0.5,
+        "mean": 0.5,
+        "min": 0.5,
+        "std": 0.0
+      },
+      "records": 1152,
+      "robust_deviation_summary": {
+        "25%": 0.0,
+        "5%": 0.0,
+        "50%": 0.0,
+        "75%": 0.0,
+        "95%": 0.0,
+        "count": 865.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "std": 0.0
+      },
+      "target_variable": "day7_total_hours",
+      "zero_mad_groups": 12
+    },
+    {
+      "assessability_percent": 11.54513888888889,
+      "assessable": 133,
+      "distribution_positions": {
+        "CENTRAL_REFERENCE_RANGE": 117,
+        "LOWER_TAIL": 8,
+        "UPPER_TAIL": 8
+      },
+      "not_assessable": 1019,
+      "peer_groups": 2,
+      "percentile_summary": {
+        "25%": 0.25,
+        "5%": 0.05271370420624152,
+        "50%": 0.5,
+        "75%": 0.75,
+        "95%": 0.9472862957937584,
+        "count": 133.0,
+        "max": 0.9925373134328358,
+        "mean": 0.5,
+        "min": 0.007462686567164179,
+        "std": 0.2897160302524623
+      },
+      "records": 1152,
+      "robust_deviation_summary": {
+        "25%": -0.8802662841542084,
+        "5%": -1.7285228852482637,
+        "50%": 0.0,
+        "75%": 0.5144413348953166,
+        "95%": 1.8359281980946993,
+        "count": 133.0,
+        "max": 2.516998336097573,
+        "mean": -0.10119432236714561,
+        "min": -2.303135732376864,
+        "std": 1.0493674014373613
+      },
+      "target_variable": "day7_casual_wage",
+      "zero_mad_groups": 0
+    }
+  ],
+  "warnings": []
+}

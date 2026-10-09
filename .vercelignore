@@ -1,0 +1,42 @@
+# What a Vercel deployment may contain (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md).
+# Allowlist: everything is excluded, then only the application code and the SYNTHETIC demo bundle are re-included.
+# Raw PLFS folders, stored runs, audit trails, evaluation runs, EDA, notebooks, media, secrets and docs never upload.
+/*
+!/fusion/
+!/survey_rules/
+!/integrity/
+!/pipeline/
+!/preprocessing/
+!/peer_groups/
+!/pattern/
+!/demo-data/
+!/requirements.txt
+!/pyproject.toml
+!/vercel.json
+
+# Inside the allowed folders: no stored runs, job records, tests or caches.
+/*/runs/
+/pipeline/jobs/
+**/tests/
+**/__pycache__/
+*.py[cod]
+
+# Never, anywhere (defence in depth; none of these belong in a deployment).
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.csv
+*.zip
+*.xlsx
+*.xls
+*.sav
+*.dta
+*.log
+users*.json
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx

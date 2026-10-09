@@ -1,0 +1,68 @@
+{
+  "components": {
+    "concentration_evidence": {
+      "assessable": 91,
+      "not_assessable": 101,
+      "not_assessable_reasons": {
+        "PATTERN_GROUP_BELOW_MINIMUM": 53,
+        "REFERENCE_HAS_NO_SPREAD": 48
+      },
+      "rows": 192
+    },
+    "fieldwork_evidence": {
+      "assessable": 144,
+      "not_assessable": 96,
+      "not_assessable_reasons": {
+        "NO_VARIATION_IN_CELL": 96
+      },
+      "rows": 240
+    },
+    "fsu_distribution_shift": {
+      "assessable": 283,
+      "not_assessable": 53,
+      "not_assessable_reasons": {
+        "PATTERN_GROUP_BELOW_MINIMUM": 53
+      },
+      "rows": 336
+    },
+    "fsu_summary": {
+      "assessable": 48,
+      "fsus": 48,
+      "notable_q_lt_threshold": 0,
+      "notable_with_fieldwork_signal": 0
+    },
+    "heaping_evidence": {
+      "assessable": 48,
+      "not_assessable": 0,
+      "not_assessable_reasons": {},
+      "rows": 48
+    },
+    "revisit_pattern_evidence": {
+      "assessable": 0,
+      "not_assessable": 1,
+      "not_assessable_reasons": {
+        "REVISIT_DATA_UNAVAILABLE": 1
+      },
+      "rows": 1
+    },
+    "temporal_drift": {
+      "assessable": 0,
+      "not_assessable": 240,
+      "not_assessable_reasons": {
+        "FSU_OBSERVED_IN_ONE_PERIOD_ONLY": 187,
+        "PATTERN_GROUP_BELOW_MINIMUM": 53
+      },
+      "rows": 240
+    }
+  },
+  "fieldwork_note": null,
+  "fsu_groups": 48,
+  "records_processed": 1152,
+  "runtime_seconds": 3.304,
+  "warnings": [
+    "Pattern uses dedicated leave-FSU-out stratum references; it does not reinterpret an FSU as an enumerator (no investigator code exists in the released data).",
+    "FSU-level alerts use the Cauchy combination of each FSU's checks with Benjamini-Hochberg control across FSUs; per-check q-values are for wording only.",
+    "Temporal drift uses preceding-period history inside one prepared release and deliberately does not estimate seasonality or cross the January-2025 structural break.",
+    "Revisit patterns aggregate only the existing 2023-24 statistical linked-change tail definition when a matching validated statistical run is supplied."
+  ]
+}

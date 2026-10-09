@@ -1,0 +1,42 @@
+{
+  "components": {
+    "conditional_models": {
+      "assessable": 1590,
+      "not_assessable": 3018,
+      "records": 4608
+    },
+    "isolation_forest": {
+      "assessable": 1152,
+      "not_assessable": 0,
+      "records": 1152
+    },
+    "peer_scoped_lof": {
+      "assessable": 1002,
+      "not_assessable": 150,
+      "records": 1152
+    },
+    "similarity": {
+      "assessable": 1152,
+      "not_assessable": 0,
+      "records": 1152
+    }
+  },
+  "conditional_models": {
+    "fitted": 14,
+    "in_round_cross_fit_fallback": 4,
+    "trained_on_earlier_periods": 10
+  },
+  "decision_path": {
+    "conditional_models": "VALUE_CHECK",
+    "isolation_forest": "RESEARCH_ONLY",
+    "peer_scoped_lof": "RESEARCH_ONLY",
+    "similarity": "INFORMATION_ONLY"
+  },
+  "records_processed": 1152,
+  "runtime_seconds": 3.888,
+  "warnings": [
+    "Exact-signature similarity is informational; near-duplicate households are an FSU-level pattern check.",
+    "Isolation Forest and LOF are research outputs only and never affect the supervisor queue.",
+    "Conditional models apply to first-visit records; revisit records are explicitly not assessable for them."
+  ]
+}

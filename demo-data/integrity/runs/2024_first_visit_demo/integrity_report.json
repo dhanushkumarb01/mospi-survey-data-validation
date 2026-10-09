@@ -1,0 +1,261 @@
+{
+  "records_checked": 1152,
+  "households_checked": 288,
+  "rules": [
+    {
+      "id": "H01_ONE_HEAD_PER_HOUSEHOLD",
+      "version": 1,
+      "type": "exists_exactly",
+      "level": "household",
+      "severity": "error",
+      "message": "The household does not list exactly one head (relation to head = 1).",
+      "source": "Schedule 10.4 Block 4 col. (4) relation to head: self-1",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "H02_HOUSEHOLD_SIZE_EQUALS_PERSONS_LISTED",
+      "version": 1,
+      "type": "count_matches",
+      "level": "household",
+      "severity": "error",
+      "message": "Household size in Block 3 differs from the number of persons listed in Block 4.",
+      "source": "Schedule 10.4 Block 3 item 1 (household size) and Block 4 (members listed)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "H03_MONTHLY_CONSUMER_EXPENDITURE_IDENTITY",
+      "version": 1,
+      "type": "arithmetic",
+      "level": "household",
+      "severity": "error",
+      "message": "Usual monthly consumer expenditure (item 5.6) differs from A + B + C + (D + E)/12.",
+      "source": "Schedule 10.4 Block 3 item 5.6: usual monthly household consumer expenditure [A + B + C + (D+E)/12]",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "H04_MONTHLY_INCOME_TOTAL",
+      "version": 1,
+      "type": "arithmetic",
+      "level": "household",
+      "severity": "error",
+      "message": "Total usual monthly income (item 7.5) differs from the sum of items 7.1 to 7.4.",
+      "source": "Schedule 10.4 (2025) Block 3 item 7.5: total of items 7.1 to 7.4",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "H05_DISTRICT_CODE_IN_STATE",
+      "version": 1,
+      "type": "references",
+      "level": "household",
+      "severity": "error",
+      "message": "The district code is not a district of the recorded State/UT in the supplied code list.",
+      "source": "Supplied district code lists (2023-June2024 and Jan-Dec2024 District_codes_PLFS_Panel_4; Post2025 Indian_Districts_CodeName)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "S02_SURVEY_DATE_WITHIN_PERIOD",
+      "version": 1,
+      "type": "within_period",
+      "level": "household",
+      "severity": "warning",
+      "message": "The household was interviewed outside the months of its survey quarter/month.",
+      "source": "Schedule 10.4 Block 2 item 2(i) date of survey; quarter/month of the sample (Block 1)",
+      "approval_status": "draft",
+      "active": false
+    },
+    {
+      "id": "R01_CWS_STATUS_CODE",
+      "version": 1,
+      "type": "allowed_values",
+      "level": "person",
+      "severity": "error",
+      "message": "Current weekly activity status is not a documented code.",
+      "source": "Schedule 10.4 codes for Block 6, items 3.1-3.7 col. 4 / item 5",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R02_AGE_RANGE",
+      "version": 1,
+      "type": "range",
+      "level": "person",
+      "severity": "error",
+      "message": "Age is outside 0-120 years.",
+      "source": "Plausibility bound (not a PLFS-specified limit); age is recorded in completed years (Vol. I Block 4)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R03_STATUS_99_ONLY_UNDER_5",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "A person aged under 5 must have activity status 99.",
+      "source": "Code list, Codes for Block 6 item 5: status 99 for persons age < 5",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R04_UNDER_5_ONLY_WITH_STATUS_99",
+      "version": 1,
+      "type": "not_value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "Activity status 99 is recorded for a person aged 5 or more.",
+      "source": "Code list, Codes for Block 6 item 5: status 99 for persons age < 5",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R05_SALARIED_EARNINGS_ONLY_FOR_31_71_72",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "Salaried earnings are recorded although the activity status does not route to Block 6 item 9.",
+      "source": "Vol. I \u00a73.6.17; Schedule 10.4 Block 6 item 9 (for 31, 71 or 72 in item 5)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R06_SELF_EMPLOYMENT_EARNINGS_ONLY_FOR_SELF_EMPLOYED",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "Self-employment earnings are recorded although the activity status does not route to Block 6 item 10.",
+      "source": "Vol. I \u00a73.6.18; Schedule 10.4 Block 6 item 10 (if entry 11, 12, 61, 62 in item 5)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R07_HELPER_EARNINGS_ZERO",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "Earnings of a helper in a household enterprise must be 0.",
+      "source": "Vol. I \u00a71.5.26(g), \u00a73.6.18",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R08_SALARIED_EARNINGS_NOT_NEGATIVE",
+      "version": 1,
+      "type": "range",
+      "level": "person",
+      "severity": "error",
+      "message": "Salaried earnings are negative; only self-employment earnings may be negative.",
+      "source": "Vol. I \u00a73.6.17-3.6.18 (negative sign provided for item 10 only)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R09_DAY7_HOURS_WITHIN_A_DAY",
+      "version": 1,
+      "type": "range",
+      "level": "person",
+      "severity": "error",
+      "message": "Hours worked on day 7 are outside 0-24.",
+      "source": "Vol. I \u00a73.6.9 (hours actually worked on a day)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R10_NO_WORK_HOURS_FOR_NON_WORKERS",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "warning",
+      "message": "Work hours on day 7 are recorded for a person whose current weekly status is not a worker status.",
+      "source": "Vol. I Box 7 and \u00a73.6.9 (hours relate to work statuses 11-72)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R11_UNIQUE_PERSON",
+      "version": 1,
+      "type": "unique",
+      "level": "person",
+      "severity": "error",
+      "message": "The same household key and person serial occur more than once.",
+      "source": "Release README common primary key",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R12_DAY7_TOTAL_COVERS_WORK_ACTIVITIES",
+      "version": 1,
+      "type": "lower_bound_sum",
+      "level": "person",
+      "severity": "error",
+      "message": "Total hours actually worked on day 7 are less than the hours of the day's recorded work activities.",
+      "source": "Schedule 10.4 Block 6 col. (6) hours actually worked for status 11-51 and col. (7) total hours actually worked considering all the work performed during the day",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R13_WEEKLY_HOURS_TOTAL",
+      "version": 1,
+      "type": "arithmetic",
+      "level": "person",
+      "severity": "error",
+      "message": "Total hours worked during the week do not equal the sum of the seven daily totals.",
+      "source": "Schedule 10.4 Block 6 item 4: total hours actually worked during the week (total of entries in items 3.1 to 3.7)",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R14_DAY7_WAGE_ONLY_FOR_CASUAL_LABOUR",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "error",
+      "message": "A day-7 wage is recorded for an activity that is not casual wage labour.",
+      "source": "Schedule 10.4 Block 6 col. (9): for 41, 42, 51 in column 4, wage earnings (received/receivable) for the work",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "R15_ATTENDANCE_ONLY_UP_TO_59",
+      "version": 1,
+      "type": "absent_when",
+      "level": "person",
+      "severity": "error",
+      "message": "Status of current attendance is recorded for a person aged 60 or more.",
+      "source": "Schedule 10.4 Block 4 col. (15): status of current attendance, for persons of age 0 to 59 years",
+      "approval_status": "approved",
+      "active": true
+    },
+    {
+      "id": "S01_DEGREE_UNDER_AGE_18",
+      "version": 1,
+      "type": "value_when",
+      "level": "person",
+      "severity": "warning",
+      "message": "A graduate or postgraduate education level is recorded for a person under 18.",
+      "source": "Plausibility check proposed by the platform team (education level vs age); not stated in Vol. I",
+      "approval_status": "draft",
+      "active": false
+    }
+  ],
+  "rule_set_version": "plfs_household_rules.yaml:plfs-household-rules-v1.0+plfs_person_rules.yaml:plfs-person-rules-v2.0",
+  "rule_set_sha256": "81224abf8c9b0d1492dba0b91ac30b115f98721633612a7d0ca59c1525ae96d7",
+  "violations": [
+    {
+      "rule_id": "H02_HOUSEHOLD_SIZE_EQUALS_PERSONS_LISTED",
+      "severity": "error",
+      "level": "household",
+      "units": 1
+    }
+  ],
+  "records_with_violations": 1,
+  "household_note": null,
+  "runtime_seconds": 1.0
+}

@@ -6,6 +6,16 @@ authentication (``--users-file``) assigns each request a named user and role;
 when it is enabled the audit trail records that authenticated name instead of
 a typed one.  It is not a substitute for the GoI-approved identity, network
 and hosting controls required before deployment.
+
+Deployment modes (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md):
+* ``review_only`` - no batch can be started, listed or queued; enforced here on the
+  server, not only in the UI.
+* ``audit_read_only`` - for hosts without a durable, shared disk: recorded decisions
+  and audit history are read, but nothing is appended (decisions, case-opened events
+  and the logged CSV export are refused with an explicit reason instead of being
+  written to temporary storage).
+* ``require_authentication`` - every /api request is refused until users are
+  configured (a users file or the ``MOSPI_USERS_JSON`` environment variable).
 """
 
 from __future__ import annotations
@@ -27,19 +37,36 @@ from fastapi.staticfiles import StaticFiles
 from . import labels as L
 from .evidence_card import build_evidence_card
 from .explain import PATTERN_KEYS, UNUSUAL, SourceResolver, build_story, pattern_item, pattern_rows, summarise_rows
-from .review import all_events, append_event, history, latest_statuses
+from .feedback import recalibration_report
+from .review import REASON_CODES, VERIFICATION_SOURCES, DecisionConflict, all_events, append_event, history, latest_statuses, verify_chain
+from .story import build_lane_story
+from pipeline.jobs import JobError, JobManager
+
+CODE_VERSION = os.environ.get("MOSPI_CODE_VERSION", "").strip() or None
 
 
 CASE_FIELDS = ["case_id", "source_observation_id", "release", "observation_type", "visit", "month", "state", "sector", "stratum", "fsu",
                "statistical_rank", "contextual_rank", "ml_rank", "historical_rank", "pattern_rank", "risk_score", "influence_score", "raw_influence",
-               "influence_target", "priority_score", "priority_rank", "priority_band", "override_applied", "rule_violation", "rule_error_count"]
+               "influence_target", "priority_score", "priority_rank", "priority_band", "override_applied", "rule_violation", "rule_error_count",
+               # lane design (fusion v2.1)
+               "case_level", "household_key", "district", "tier", "lane", "lanes", "tier_reason", "queue_position", "value_p", "value_lead_variable",
+               "value_lead_mechanism", "value_lead_direction", "value_lead_observed", "value_lead_typical", "value_variables_assessed", "coding_p",
+               "coding_code", "impact_se", "fsu_q_value", "fsu_notable", "rule_ids", "rule_warning_count"]
 CASE_COLUMNS = ", ".join(CASE_FIELDS)  # kept for compatibility; queries use the columns a run actually has
 # Additional stored fields needed to write plain-language list summaries.
 SUMMARY_FIELDS = ["target_variable", "percentile_position", "peer_group_size", "ml_statement", "pattern_statement", "pattern_notable_checks",
                   "contextual_status", "provenance_json"]
-ALLOWED_FILTERS = {"priority_band", "state", "sector", "stratum", "fsu", "release", "visit", "month"}
+ALLOWED_FILTERS = {"priority_band", "state", "sector", "stratum", "fsu", "release", "visit", "month", "tier", "case_level", "district", "household_key"}
+LANE_CODES = {"RULE", "RULE_SOFT", "VALUE", "CODING"}
+ROLES_THAT_EXPORT = {"supervisor", "admin"}
 REVIEW_FILTERS = {"UNREVIEWED", "REVIEWED", *L.DECISIONS}
 ROLES_THAT_DECIDE = {"supervisor", "admin"}
+ROLES_THAT_RUN_BATCH = {"admin"}
+REVIEW_ONLY_REASON = ("This instance is review-only. Validation batches are run separately on the processing machine and published "
+                      "here as finished runs; they cannot be started from this instance.")
+AUDIT_READ_ONLY_REASON = ("This instance has no durable audit store, so decisions cannot be recorded here, and CSV exports (which are "
+                          "logged in the audit trail) are not offered. Recorded decisions and audit history are shown read-only.")
+NO_USERS_REASON = "Sign-in is required on this deployment, but no users are configured (MOSPI_USERS_JSON). No data is served until they are."
 
 
 def _columns(path: Path) -> set[str]:
@@ -63,8 +90,8 @@ class FusionRepository:
             if metadata_path.is_file() and (directory / "fused_cases.parquet").is_file():
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 rows.append({"directory": directory.name, **metadata})
-        # Newest method version first, then release (latest survey round first).
-        rows.sort(key=lambda r: (str(r.get("fusion_version", "")), str(r.get("release", ""))), reverse=True)
+        # Current-method (lane) runs first, then the latest survey round; superseded runs after them.
+        rows.sort(key=lambda r: ("lanes" in str(r.get("fusion_version", "")), str(r.get("release", "")), str(r.get("directory", ""))), reverse=True)
         return rows
 
     def path(self, run: str | None) -> Path:
@@ -96,6 +123,10 @@ class FusionRepository:
         evidence_source = filters.get("evidence_source")
         if evidence_source in {"statistical", "contextual", "ml", "pattern", "historical"}:
             clauses.append(f'"{evidence_source}_status" = \'ASSESSABLE\'')
+        lane = filters.get("lane")
+        if lane in LANE_CODES and "lanes" in _columns(directory / "fused_cases.parquet"):
+            clauses.append("list_contains(string_split(COALESCE(lanes, ''), ','), ?)")
+            values.append(lane)
         strong_source = filters.get("strong_source")
         if strong_source in {"statistical", "contextual", "ml", "historical"} and f"{strong_source}_rank" in _columns(directory / "fused_cases.parquet"):
             clauses.append(f'"{strong_source}_rank" >= {UNUSUAL}')
@@ -131,11 +162,13 @@ class FusionRepository:
         return rows, int(total)
 
 
-def _load_users(path: Path | None) -> dict[str, dict[str, str]]:
-    """``{"users": [{"name": ..., "role": "supervisor|technical|admin", "token_sha256": ...}]}``; tokens are never stored in clear."""
-    if path is None:
+def _load_users(path: Path | None, text: str | None = None) -> dict[str, dict[str, str]]:
+    """``{"users": [{"name": ..., "role": "supervisor|technical|admin", "token_sha256": ...}]}``; tokens are never stored in clear.
+
+    Read from a file, or from the same JSON document in ``text`` (the ``MOSPI_USERS_JSON`` environment variable)."""
+    if path is None and not (text or "").strip():
         return {}
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    document = json.loads(Path(path).read_text(encoding="utf-8") if path is not None else text)
     users = {}
     for user in document.get("users", []):
         if user.get("role") not in {"supervisor", "technical", "admin"} or len(str(user.get("token_sha256", ""))) != 64:
@@ -144,18 +177,35 @@ def _load_users(path: Path | None) -> dict[str, dict[str, str]]:
     return users
 
 
-def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | None = None, users_file: Path | None = None) -> FastAPI:
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | None = None, users_file: Path | None = None,
+               batch_datasets: dict[str, dict[str, Any]] | None = None, *, users_json: str | None = None, review_only: bool = False,
+               audit_read_only: bool = False, require_authentication: bool = False) -> FastAPI:
     app = FastAPI(title="MoSPI Survey Data Validation", docs_url=None, redoc_url=None, openapi_url=None)
     repository = FusionRepository(fusion_root)
     root = Path(project_root) if project_root else Path(fusion_root).resolve().parent.parent
     # Source runs live beside fusion/ in the project root (<root>/fusion/runs).
     resolver = SourceResolver(root)
-    users = _load_users(users_file)
+    users = _load_users(users_file, users_json)
+    # In review-only mode no job manager exists, so no code path can start or list a batch.
+    jobs = None if review_only else JobManager(root, batch_datasets)
+    manifest_path = root / "SERVING_DATA_MANIFEST.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    except (OSError, ValueError):
+        manifest = {}
+    data_notice = manifest.get("notice") if manifest.get("synthetic") else None
 
     @app.middleware("http")
     async def security(request: Request, call_next):
         user = None
-        if users and request.url.path.startswith("/api/") and request.url.path != "/api/session/required":
+        is_api = request.url.path.startswith("/api/") and request.url.path != "/api/session/required"
+        if is_api and require_authentication and not users:
+            return JSONResponse({"detail": NO_USERS_REASON}, status_code=503)
+        if users and is_api:
             header = request.headers.get("authorization", "")
             token = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
             user = users.get(hashlib.sha256(token.encode("utf-8")).hexdigest()) if token else None
@@ -163,6 +213,10 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
                 return JSONResponse({"detail": "Authentication required."}, status_code=401)
             if request.method == "POST" and request.url.path.endswith("/events") and user["role"] not in ROLES_THAT_DECIDE:
                 return JSONResponse({"detail": "Your role cannot record review decisions."}, status_code=403)
+            if request.method == "POST" and request.url.path == "/api/batch" and user["role"] not in ROLES_THAT_RUN_BATCH:
+                return JSONResponse({"detail": "Only an administrator can start a batch validation."}, status_code=403)
+        if review_only and request.url.path.startswith("/api/batch") and request.method not in ("GET", "HEAD"):
+            return JSONResponse({"detail": REVIEW_ONLY_REASON, "review_only": True}, status_code=403)
         request.state.user = user
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -189,13 +243,22 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         user = getattr(request.state, "user", None)
         return {"authentication": bool(users), "user": user}
 
+    @app.get("/api/deployment")
+    def deployment() -> dict[str, Any]:
+        """What this instance allows, so the UI can say so plainly (the server enforces it either way)."""
+        return {"review_only": review_only, "batch_reason": REVIEW_ONLY_REASON if review_only else None,
+                "audit_writable": not audit_read_only, "audit_reason": AUDIT_READ_ONLY_REASON if audit_read_only else None,
+                "data_notice": data_notice}
+
     @app.get("/api/runs")
     def list_runs() -> list[dict[str, Any]]:
         return repository.runs()
 
     @app.get("/api/labels")
     def code_labels() -> dict[str, Any]:
-        return {"states": L.STATES, "sectors": L.SECTORS, "bands": L.PRIORITY_BANDS, "decisions": L.DECISIONS}
+        return {"states": L.STATES, "sectors": L.SECTORS, "bands": L.PRIORITY_BANDS, "decisions": L.DECISIONS, "lanes": L.LANES,
+                "reason_codes": {decision: {code: L.REASON_CODES[code] for code in sorted(codes)} for decision, codes in REASON_CODES.items()},
+                "verification_sources": {code: L.VERIFICATION_SOURCES[code] for code in sorted(VERIFICATION_SOURCES)}}
 
     @app.get("/api/summary")
     def summary(run: str | None = None) -> dict[str, Any]:
@@ -212,7 +275,10 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         bands = {row["priority_band"]: row["records"] for row in repository.query(parquet, "SELECT priority_band, COUNT(*) AS records FROM read_parquet(?) GROUP BY 1")}
         audit = directory / "review_audit.sqlite"
         statuses = latest_statuses(audit)
-        decisions = {key: 0 for key in ("CONFIRMED_ISSUE", "CONFIRMED_VALID", "INCONCLUSIVE_NEEDS_FOLLOW_UP")}
+        available = _columns(parquet)
+        lanes_method = "tier" in available
+        top_band = "CHECK_NOW" if lanes_method else "CRITICAL"
+        decisions = {key: 0 for key in ("CONFIRMED_ERROR", "VALID_BUT_UNUSUAL", "NEEDS_FIELD_VERIFICATION", "CANNOT_VERIFY", "ESCALATE")}
         for decision in statuses.values():
             decisions[decision] = decisions.get(decision, 0) + 1
         events = all_events(audit)
@@ -226,11 +292,10 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
             parquet, "SELECT priority_band, COUNT(*) AS records FROM read_parquet(?) WHERE case_id IN (SELECT UNNEST(?)) GROUP BY 1",
             [list(statuses) or ["__none__"]])}
         # Where the highest-priority records sit, with each State/UT's total for context.
-        states = repository.query(parquet, "SELECT state, COUNT(*) FILTER (WHERE priority_band = 'CRITICAL') AS highest, COUNT(*) AS records "
+        states = repository.query(parquet, f"SELECT state, COUNT(*) FILTER (WHERE priority_band = '{top_band}') AS highest, COUNT(*) AS records "
                                            "FROM read_parquet(?) GROUP BY 1 HAVING highest > 0 ORDER BY highest DESC, state LIMIT 10")
         # Why the highest-priority records are there: how many have each record-level source at the
         # "unusual" display threshold.  A record can count under several sources (they overlap).
-        available = _columns(parquet)
         reason_sql = {name: f"COUNT(*) FILTER (WHERE {column} >= {UNUSUAL})" for name, column in
                       (("statistical", "statistical_rank"), ("historical", "historical_rank"), ("ml", "ml_rank"), ("contextual", "contextual_rank"))
                       if column in available}
@@ -240,15 +305,24 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
             strong = [f"COALESCE({c}, 0) >= {UNUSUAL}" for c in ("statistical_rank", "historical_rank", "ml_rank", "contextual_rank") if c in available]
             strong += ["COALESCE(rule_violation, FALSE)"] if "rule_violation" in available else []
             reason_sql["combined_only"] = f"COUNT(*) FILTER (WHERE NOT ({' OR '.join(strong)}))"
-        highest_reasons = repository.query(parquet, f"SELECT {', '.join(f'{v} AS {k}' for k, v in reason_sql.items())} FROM read_parquet(?) WHERE priority_band = 'CRITICAL'")[0]             if reason_sql else {}
+        if lanes_method:
+            reason_sql = {lane.lower(): f"COUNT(*) FILTER (WHERE list_contains(string_split(COALESCE(lanes, ''), ','), '{lane}'))" for lane in LANE_CODES}
+        highest_reasons = repository.query(parquet, f"SELECT {', '.join(f'{v} AS {k}' for k, v in reason_sql.items())} FROM read_parquet(?) WHERE priority_band = '{top_band}'")[0] \
+            if reason_sql else {}
+        report_queue = report.get("queue", {})
         return {
             "run": directory.name, "metadata": repository.metadata(directory),
             "highest_reasons": {k: int(v or 0) for k, v in highest_reasons.items()}, "unusual_threshold": UNUSUAL,
-            "records_processed": report["records_processed"], "priority_rows": report["priority_rows"],
-            "not_prioritised": report["records_processed"] - report["priority_rows"],
-            "rule_violation_records": report.get("rule_violation_records"),
+            "method": "lanes" if lanes_method else "superseded_v2_0",
+            "records_processed": report["records_processed"],
+            "priority_rows": report.get("priority_rows", report["records_processed"] - int(bands.get("NOT_ASSESSABLE", 0))),
+            "not_prioritised": int(bands.get("NOT_ASSESSABLE", 0)) if lanes_method else report["records_processed"] - report["priority_rows"],
+            "rule_violation_records": report.get("rule_violation_records", (report.get("rule_findings") or {}).get("persons_with_hard_rule")),
+            "household_rule_cases": (report.get("rule_findings") or {}).get("households_with_hard_rule"),
+            "budget": report_queue, "burden": report.get("burden"), "coverage": report.get("coverage"),
             "bands": [{"band": band, "label": L.PRIORITY_BANDS[band], "records": int(bands.get(band, 0)),
-                       "reviewed": int(reviewed_by_band.get(band, 0))} for band in L.PRIORITY_BANDS],
+                       "reviewed": int(reviewed_by_band.get(band, 0))}
+                      for band in (("CHECK_NOW", "CHECK_IF_TIME", "NOT_FLAGGED", "NOT_ASSESSABLE") if lanes_method else ("CRITICAL", "HIGH", "MEDIUM", "LOW", "NOT_ASSESSABLE"))],
             "highest_by_state": [{"state": L.clean(row["state"]), "label": L.state_name(row["state"]), "highest": int(row["highest"]),
                                   "records": int(row["records"])} for row in states],
             "review": {"decided": len(statuses), "decisions": decisions, "opened_without_decision": len(viewed - set(statuses)), "last_decision_utc": last},
@@ -263,10 +337,12 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
     def cases(run: str | None = None, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200), q: str | None = None,
               priority_band: str | None = None, state: str | None = None, sector: str | None = None, stratum: str | None = None,
               fsu: str | None = None, release: str | None = None, visit: str | None = None, month: str | None = None,
-              evidence_source: str | None = None, review_status: str | None = None, strong_source: str | None = None, summaries: bool = False) -> dict[str, Any]:
+              evidence_source: str | None = None, review_status: str | None = None, strong_source: str | None = None, summaries: bool = False,
+              tier: str | None = None, lane: str | None = None, case_level: str | None = None, district: str | None = None) -> dict[str, Any]:
         directory = repository.path(run)
         filters = queue_filters(priority_band=priority_band, state=state, sector=sector, stratum=stratum, fsu=fsu, release=release,
-                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source)
+                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source,
+                                tier=tier, lane=lane, case_level=case_level, district=district)
         rows, total = repository.case_rows(directory, offset=offset, limit=limit, query=q, filters=filters, summaries=summaries)
         if summaries:
             metadata = repository.metadata(directory)
@@ -306,23 +382,31 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
             if weight is not None:
                 weight_share = repository.query(parquet, f"SELECT AVG(CASE WHEN w < $2 THEN 1.0 WHEN w = $2 THEN 0.5 ELSE 0.0 END) AS s "
                                                          f"FROM (SELECT TRY_CAST({weight_column} AS DOUBLE) AS w FROM read_parquet($1)) WHERE w IS NOT NULL", [weight])[0]["s"]
-            row["story"] = build_story(row, resolver, priority_position=position, priority_total=total, weight_share=weight_share)
+            if row.get("tier") is not None:
+                row["story"] = build_lane_story(row, resolver, directory)
+            else:   # superseded V2.0 run, shown for the record
+                row["story"] = build_story(row, resolver, priority_position=position, priority_total=total, weight_share=weight_share)
+                row["story"]["superseded_method"] = True
         return row
 
     @app.get("/api/queue/position")
     def queue_position(position: int = Query(..., ge=1), run: str | None = None, q: str | None = None, priority_band: str | None = None,
                        state: str | None = None, sector: str | None = None, stratum: str | None = None, fsu: str | None = None,
                        release: str | None = None, visit: str | None = None, month: str | None = None, evidence_source: str | None = None,
-                       review_status: str | None = None, strong_source: str | None = None) -> dict[str, Any]:
+                       review_status: str | None = None, strong_source: str | None = None, tier: str | None = None, lane: str | None = None,
+                       case_level: str | None = None, district: str | None = None) -> dict[str, Any]:
         """Return the case at a 1-based position in a filtered, priority-ordered list."""
         directory = repository.path(run)
         filters = queue_filters(priority_band=priority_band, state=state, sector=sector, stratum=stratum, fsu=fsu, release=release,
-                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source)
+                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source,
+                                tier=tier, lane=lane, case_level=case_level, district=district)
         rows, total = repository.case_rows(directory, offset=position - 1, limit=1, query=q, filters=filters)
         return {"case_id": rows[0]["case_id"] if rows else None, "position": position, "total": total}
 
     @app.post("/api/cases/{case_id}/events")
     def record_event(case_id: str, payload: dict[str, Any], request: Request, run: str | None = None) -> dict[str, Any]:
+        if audit_read_only:
+            raise HTTPException(503, AUDIT_READ_ONLY_REASON)
         directory = repository.path(run)
         evidence = repository.query(directory / "fused_cases.parquet", "SELECT * FROM read_parquet(?) WHERE case_id=?", [case_id])
         if not evidence:
@@ -331,11 +415,21 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         if event_type not in {"CASE_VIEWED", "DECISION_MADE"}:
             raise HTTPException(422, "Unknown event type.")
         user = getattr(request.state, "user", None)
-        actor = user["name"] if user else str(payload.get("actor", "local-supervisor"))
+        # Without sign-in the typed name is recorded but marked as unverified (plan N10).
+        actor = user["name"] if user else str(payload.get("actor") or "local-supervisor")[:120]
         snapshot = build_evidence_card(pd.Series(evidence[0]))
+        lane = (str(evidence[0].get("lanes") or "").split(",") or [None])[0] or None
+        # Optional optimistic check: the client sends the last decision it saw (null = none).
+        expected = {"expected_last_decision_id": payload.get("expected_last_decision_id")} if "expected_last_decision_id" in payload else {}
         try:
-            return append_event(directory / "review_audit.sqlite", case_id=case_id, event_type=event_type,
-                                actor=actor, decision=payload.get("decision"), comment=payload.get("comment"), evidence_snapshot=snapshot)
+            return append_event(directory / "review_audit.sqlite", case_id=case_id, event_type=event_type, actor=actor,
+                                decision=payload.get("decision"), comment=payload.get("comment"), evidence_snapshot=snapshot,
+                                reason_code=payload.get("reason_code"), verification_source=payload.get("verification_source"),
+                                corrected_field=payload.get("corrected_field"), corrected_value=payload.get("corrected_value"),
+                                lane=lane, opened_at_utc=payload.get("opened_at_utc"), actor_authenticated=user is not None,
+                                actor_role=user["role"] if user else None, **expected)
+        except DecisionConflict as error:
+            raise HTTPException(409, str(error)) from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
@@ -360,7 +454,10 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
             key, _, person = str(row.get("source_observation_id", "")).partition("|person=")
             output.append({
                 "case_id": event["case_id"], "decision": event["decision"], "decision_label": L.DECISIONS.get(event["decision"], event["decision"]),
-                "actor": event["actor"], "comment": event["comment"], "decided_at_utc": event["event_timestamp_utc"],
+                "actor": event["actor"], "actor_verified": bool(event.get("actor_authenticated")), "comment": event["comment"],
+                "reason_code": event.get("reason_code"), "reason_label": L.REASON_CODES.get(event.get("reason_code"), event.get("reason_code")),
+                "verification_source": event.get("verification_source"), "corrected_field": event.get("corrected_field"),
+                "corrected_value": event.get("corrected_value"), "seconds_on_case": event.get("seconds_on_case"), "decided_at_utc": event["event_timestamp_utc"],
                 "record_label": f"FSU {row.get('fsu')} · Household {key.split('|')[-1] if key else '—'} · Person {person or '—'}",
                 "location_label": f"{L.state_name(row.get('state'))} · {L.sector_name(row.get('sector'))}",
                 "band": row.get("priority_band"),
@@ -450,6 +547,70 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         return {"available": True, "rows": rows, "notable": notable, "indicators": indicators, "limitations": report.get("limitations", []),
                 "periods": report.get("periods_in_pool", []), "design_period": repository.metadata(directory).get("design_period")}
 
+    @app.get("/api/worklist")
+    def worklist(run: str | None = None, state: str | None = None, district: str | None = None, fsu: str | None = None,
+                 tier: str = Query("A", pattern="^(A|B|AB)$"), offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)) -> dict[str, Any]:
+        """Queued cases grouped by FSU and household (verification is done per household visit or call; plan W8.1)."""
+        directory = repository.path(run)
+        parquet = directory / "fused_cases.parquet"
+        if "tier" not in _columns(parquet):
+            raise HTTPException(409, "This run uses the superseded V2.0 method and has no tiered worklist.")
+        tiers = ["A", "B"] if tier == "AB" else [tier]
+        clauses, values = ["tier IN (SELECT UNNEST(?))"], [tiers]
+        for name, value in (("state", state), ("district", district), ("fsu", fsu)):
+            if value:
+                clauses.append(f'"{name}" = ?'); values.append(value)
+        where = " WHERE " + " AND ".join(clauses)
+        groups = repository.query(parquet, f"SELECT state, sector, fsu, COUNT(*) AS cases, MIN(queue_position) AS first_position, "
+                                           f"MAX(CAST(fsu_notable AS INTEGER)) AS fsu_alert FROM read_parquet(?){where} GROUP BY 1, 2, 3 "
+                                           f"ORDER BY first_position LIMIT ? OFFSET ?", [*values, limit, offset])
+        total = repository.query(parquet, f"SELECT COUNT(*) AS n FROM (SELECT DISTINCT state, sector, fsu FROM read_parquet(?){where})", values)[0]["n"]
+        statuses = latest_statuses(directory / "review_audit.sqlite")
+        if groups:
+            keys = [f"{g['state']}|{g['sector']}|{g['fsu']}" for g in groups]
+            columns = _select(parquet, CASE_FIELDS)
+            rows = repository.query(parquet, f"SELECT {columns} FROM read_parquet(?){where} AND (state || '|' || sector || '|' || fsu) IN (SELECT UNNEST(?)) "
+                                             f"ORDER BY queue_position", [*values, keys])
+            by_fsu: dict[str, dict[str, list]] = {}
+            for row in rows:
+                row["review_status"] = statuses.get(row["case_id"], "UNREVIEWED")
+                row["review_label"] = L.DECISIONS.get(row["review_status"], row["review_status"])
+                row["lane_labels"] = [L.LANES.get(x, x) for x in str(row.get("lanes") or "").split(",") if x]
+                household = row.get("household_key") or str(row["source_observation_id"]).split("|person=")[0].removesuffix("|household")
+                by_fsu.setdefault(f"{row['state']}|{row['sector']}|{row['fsu']}", {}).setdefault(household, []).append(row)
+            for group in groups:
+                households = by_fsu.get(f"{group['state']}|{group['sector']}|{group['fsu']}", {})
+                group["location_label"] = f"{L.state_name(group['state'])} · {L.sector_name(group['sector'])}"
+                group["households"] = [{"household_key": key, "household": key.split("|")[-1], "cases": cases} for key, cases in households.items()]
+                group["decided"] = sum(1 for cases in households.values() for c in cases if c["review_status"] != "UNREVIEWED")
+        return {"rows": groups, "total": int(total), "offset": offset, "limit": limit}
+
+    @app.get("/api/feedback")
+    def feedback(run: str | None = None) -> dict[str, Any]:
+        """Decision-based recalibration report (proposals only; nothing is applied)."""
+        directory = repository.path(run)
+        parquet = directory / "fused_cases.parquet"
+        if "tier" not in _columns(parquet):
+            return {"available": False, "reason": "Superseded V2.0 run: no lanes or tiers."}
+        statuses = latest_statuses(directory / "review_audit.sqlite")
+        cases = pd.DataFrame(repository.query(parquet, "SELECT case_id, tier, lane FROM read_parquet(?) WHERE tier IN ('A', 'B') OR case_id IN (SELECT UNNEST(?))",
+                                              [list(statuses) or ["__none__"]]))
+        events = [e for e in all_events(directory / "review_audit.sqlite") if e["event_type"] == "DECISION_MADE" and e.get("seconds_on_case") is not None]
+        seconds = sorted(float(e["seconds_on_case"]) for e in events)
+        report = recalibration_report(cases, statuses) if len(cases) else {"decided_cases": 0}
+        report["median_minutes_per_decided_case"] = round(seconds[len(seconds) // 2] / 60, 1) if seconds else None
+        return {"available": True, **report}
+
+    @app.get("/api/audit/verify")
+    def audit_verify(run: str | None = None) -> dict[str, Any]:
+        """Recompute the audit hash chain of a run's review store."""
+        directory = repository.path(run)
+        return verify_chain(directory / "review_audit.sqlite")
+
+    @app.get("/api/version")
+    def version() -> dict[str, Any]:
+        return {"code_version": CODE_VERSION or "not set (MOSPI_CODE_VERSION)"}
+
     @app.get("/api/integrity")
     def integrity(run: str | None = None) -> dict[str, Any]:
         directory = repository.path(run)
@@ -462,7 +623,65 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
     def evaluation() -> dict[str, Any]:
         folder = root / "evaluation" / "results"
         results = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(folder.glob("*.json"))} if folder.is_dir() else {}
-        return {"available": bool(results), "results": results}
+        # Current method: pre-registered protocol (evaluation/PROTOCOL.md).  Seeds 1-5 on fold A are development
+        # runs; seeds 6-20 on fold B are confirmation runs.  A short summary per run; the full JSON stays on disk.
+        protocol = []
+        for path in sorted((folder / "protocol_v1").glob("*.json")) if (folder / "protocol_v1").is_dir() else []:
+            report = json.loads(path.read_text(encoding="utf-8"))
+            designs = report.get("designs_capi_pass", {})
+            protocol.append({"run": path.stem, "release": report.get("release"), "fold": report.get("fold"), "seed": report.get("seed"),
+                             "kind": "confirmation" if report.get("fold") == "B" and int(report.get("seed", 0)) >= 6 else "development",
+                             "capi_pass_records": report.get("capi_pass_records"), "code_version": report.get("code_version"),
+                             "recall_at_1pct": {name: (m.get("at_0.01") or {}).get("recall") for name, m in designs.items()},
+                             "precision_at_1pct": {name: (m.get("at_0.01") or {}).get("precision") for name, m in designs.items()},
+                             "paired_differences": report.get("paired_comparisons_recall_at_1pct"), "group_level": report.get("group_level"),
+                             "rule_list": report.get("rule_list")})
+        return {"available": bool(results), "results": results, "protocol_v1": protocol}
+
+    # ---------------------------------------------------------------- batch validation (W8.7)
+
+    @app.get("/api/batch/inputs")
+    def batch_inputs(request: Request) -> dict[str, Any]:
+        user = getattr(request.state, "user", None)
+        if jobs is None:
+            return {"inputs": [], "stages": [], "can_start": False, "review_only": True, "reason": REVIEW_ONLY_REASON,
+                    "upload": {"available": False, "reason": REVIEW_ONLY_REASON}}
+        return {"inputs": jobs.inputs(), "stages": ["peer", "statistical", "contextual", "ml", "pattern", "historical", "integrity", "fusion"],
+                "can_start": not users or (user is not None and user["role"] in ROLES_THAT_RUN_BATCH),
+                "upload": {"available": False, "reason": "Survey files are prepared on the server (python -m preprocessing ...), which checks the "
+                                                         "release layout, before they can be validated here. Uploading raw files from the browser is not offered."}}
+
+    @app.get("/api/batch")
+    def batch_jobs() -> dict[str, Any]:
+        if jobs is None:
+            return {"jobs": [], "review_only": True, "reason": REVIEW_ONLY_REASON}
+        return {"jobs": [{k: v for k, v in job.items() if k not in ("inputs", "traceback", "log_tail", "roots", "log")} for job in jobs.list()]}
+
+    @app.get("/api/batch/{job_id}")
+    def batch_job(job_id: str) -> dict[str, Any]:
+        if jobs is None:
+            raise HTTPException(404, REVIEW_ONLY_REASON)
+        try:
+            job = jobs.get(job_id)
+        except JobError as error:
+            raise HTTPException(error.status, str(error)) from error
+        return {k: v for k, v in job.items() if k not in ("roots", "log", "inputs")}
+
+    @app.post("/api/batch")
+    def start_batch(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        if jobs is None:   # also refused by the middleware; kept here so the route itself never starts one
+            raise HTTPException(403, REVIEW_ONLY_REASON)
+        user = getattr(request.state, "user", None)
+        rerun = payload.get("rerun") or []
+        if not isinstance(rerun, list) or len(rerun) > 8:
+            raise HTTPException(422, "rerun must be a list of stage names.")
+        actor = user["name"] if user else str(payload.get("actor") or "")[:120]
+        try:
+            job = jobs.start(str(payload.get("release") or ""), str(payload.get("label") or ""), actor=actor, actor_verified=user is not None,
+                             reuse_label=str(payload.get("reuse_label") or "") or None, rerun=[str(x) for x in rerun])
+        except JobError as error:
+            raise HTTPException(error.status, str(error)) from error
+        return {k: v for k, v in job.items() if k not in ("roots", "log", "inputs")}
 
     @app.post("/api/validate/record")
     def validate_record(payload: dict[str, Any], run: str | None = None) -> dict[str, Any]:
@@ -474,7 +693,10 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         """
         from integrity.engine import evaluate as evaluate_rules, load_rules
         directory = repository.path(run)
-        record = {k: ("" if v is None else str(v)) for k, v in dict(payload.get("record", {})).items()}
+        submitted = payload.get("record", {})
+        if not isinstance(submitted, dict) or len(submitted) > 50 or any(len(str(k)) > 64 or len(str(v)) > 100 for k, v in submitted.items()):
+            raise HTTPException(422, "A record must be an object with at most 50 fields of at most 100 characters.")
+        record = {str(k): ("" if v is None else str(v)) for k, v in submitted.items()}
         frame = pd.DataFrame([{**record, "source_observation_id": "submitted", "record_key": "submitted", "person_serial": "1"}])
         violations = evaluate_rules(frame, load_rules()).drop(columns=["source_observation_id"]).to_dict(orient="records")
         comparisons = _online_comparisons(source_dir(directory, "statistical"), record)
@@ -485,11 +707,21 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
     def export_queue(run: str | None = None, q: str | None = None, priority_band: str | None = None, state: str | None = None,
                      sector: str | None = None, stratum: str | None = None, fsu: str | None = None, release: str | None = None,
                      visit: str | None = None, month: str | None = None, evidence_source: str | None = None,
-                     review_status: str | None = None, strong_source: str | None = None) -> StreamingResponse:
-        """Stream the complete filtered list as CSV (no truncation), in priority order."""
+                     review_status: str | None = None, strong_source: str | None = None, tier: str | None = None, lane: str | None = None,
+                     case_level: str | None = None, district: str | None = None, request: Request = None) -> StreamingResponse:
+        """Stream the complete filtered list as CSV (no truncation), in priority order.  Logged in the audit trail."""
+        if audit_read_only:   # every export is logged; without a durable audit store it is not offered
+            raise HTTPException(503, AUDIT_READ_ONLY_REASON)
         directory = repository.path(run)
+        user = getattr(request.state, "user", None) if request is not None else None
+        if users and (user is None or user["role"] not in ROLES_THAT_EXPORT):
+            raise HTTPException(403, "Your role cannot export case lists.")
         filters = queue_filters(priority_band=priority_band, state=state, sector=sector, stratum=stratum, fsu=fsu, release=release,
-                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source)
+                                visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source,
+                                tier=tier, lane=lane, case_level=case_level, district=district)
+        append_event(directory / "review_audit.sqlite", case_id="*", event_type="EXPORT", actor=user["name"] if user else "local-user",
+                     comment=json.dumps({"filters": filters, "query": q}, sort_keys=True), actor_authenticated=user is not None,
+                     actor_role=user["role"] if user else None)
         where, values = repository.where(directory, query=q, filters=filters)
         parquet = directory / "fused_cases.parquet"
         columns = _select(parquet, CASE_FIELDS)
@@ -530,10 +762,12 @@ def create_app(fusion_root: Path = Path("fusion/runs"), project_root: Path | Non
         sources = {module: source_dir(directory, module) is not None for module in metadata.get("source_runs", {})}
         # The preparation run is referenced by its own key in Fusion metadata.
         sources["preprocessing"] = resolver.run_dir("preprocessing", str(metadata["release"]), str(metadata["observation"]), metadata.get("input_preprocessing_run_id")) is not None
-        audit_writable = os.access(directory, os.W_OK)
-        status = "ok" if all(sources.values()) and audit_writable else "degraded"
-        return JSONResponse({"status": status, "runs": len(available), "default_run": available[0]["directory"], "source_runs_found": sources,
-                             "audit_store_writable": audit_writable, "evaluation_results": (root / "evaluation" / "results").is_dir()},
+        audit_writable = not audit_read_only and os.access(directory, os.W_OK)
+        status = "ok" if all(sources.values()) and (audit_writable or audit_read_only) else "degraded"
+        return JSONResponse({"status": status, "code_version": CODE_VERSION or "not set (MOSPI_CODE_VERSION)", "fusion_version": metadata.get("fusion_version"),
+                             "runs": len(available), "default_run": available[0]["directory"], "source_runs_found": sources,
+                             "audit_store_writable": audit_writable, "audit_store": "read-only" if audit_read_only else "local file",
+                             "review_only": review_only, "evaluation_results": (root / "evaluation" / "results").is_dir()},
                             status_code=200 if status == "ok" else 503)
 
     static = Path(__file__).parent / "ui"
