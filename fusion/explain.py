@@ -26,7 +26,8 @@ from typing import Any
 
 import duckdb
 
-from peer_groups.config import EARNINGS_LEVELS, HOURS_LEVELS, SOURCE_PROFILES
+from peer_groups.config import CASUAL_WAGE_LEVELS, EARNINGS_LEVELS, HOURS_LEVELS, SOURCE_PROFILES
+from survey_rules.schema import column_map
 from preprocessing.config import CONTRACTS
 
 from . import labels as L
@@ -35,7 +36,7 @@ from . import labels as L
 # Display conventions only (see module docstring).
 VERY_UNUSUAL, UNUSUAL, SOMEWHAT_UNUSUAL = 0.99, 0.95, 0.80
 NOTABLE_Q = 0.05
-GROUP_LEVELS = {"earnings_first_visit": EARNINGS_LEVELS, "hours_first_visit": HOURS_LEVELS}
+GROUP_LEVELS = {"earnings_first_visit": EARNINGS_LEVELS, "hours_first_visit": HOURS_LEVELS, "casual_wage_first_visit": CASUAL_WAGE_LEVELS}
 
 # Block 4 columns 4/5/7 (relation, sex, marital status) are not part of the
 # preparation contract mapping, so they are named here per documented layout.
@@ -71,6 +72,7 @@ REFERENCE_PERIOD = {
     "cws_earnings_salaried": "for the preceding calendar month",
     "cws_earnings_self_employed": "for the last 30 days",
     "day7_total_hours": "on day 7 of the reference week",
+    "day7_casual_wage": "for the casual work on day 7 of the reference week",
 }
 
 
@@ -160,6 +162,12 @@ def _dimension_value(dimension: str, value: Any) -> str:
         return f"group {text} (first digit of the occupation code)"
     if dimension == "industry_division":
         return f"industry division {text}"
+    if dimension == "day7_activity1_status":
+        return _status_label(text)
+    if dimension == "day7_activity1_industry":
+        return f"industry division {text} (work on day 7)"
+    if dimension == "quarter":
+        return f"the same survey quarter ({text})"
     return text
 
 
@@ -180,7 +188,15 @@ def natural_group(grouping_values: Any) -> str:
         extras.append(f"education level “{label}”" if label else f"education code {values['education']}")
     if L.clean(values.get("industry_division")):
         extras.append(f"industry division {values['industry_division']}")
-    return f"people in {where}" + (f" with the same {_join(extras)}" if extras else "")
+    if L.clean(values.get("day7_activity1_status")):
+        label = L.code_label(L.ACTIVITY_STATUS, values["day7_activity1_status"])
+        extras.append(f"day-7 work “{label}”" if label else f"day-7 activity code {values['day7_activity1_status']}")
+    if L.clean(values.get("day7_activity1_industry")):
+        extras.append(f"day-7 industry division {values['day7_activity1_industry']}")
+    sentence = f"people in {where}" + (f" with the same {_join(extras)}" if extras else "")
+    if L.clean(values.get("quarter")):
+        sentence += f", interviewed in the same quarter"
+    return sentence
 
 
 def describe_group(grouping_values: Any, grouping_dimensions: Any = None) -> list[dict[str, str]]:
@@ -265,13 +281,12 @@ def person_context(case: dict[str, Any], prep_dir: Path | None) -> dict[str, Any
         **({k: v for k, v in profile.context_columns.items()} if profile else {}),
     }
     serial = contract.person_fields[contract.person_serial]
-    with duckdb.connect() as connection:
-        available = set(connection.execute("SELECT * FROM read_parquet(?) LIMIT 0", [str(path)]).fetchdf().columns)
-    wanted = {name: column for name, column in fields.items() if column and column in available}
-    if serial not in available or not wanted:
+    physical = column_map(path)     # stored runs may hold the legacy iospi_* names (plan W0.1)
+    wanted = {name: column for name, column in fields.items() if column and column in physical}
+    if serial not in physical or "MoSPI_record_key" not in physical or not wanted:
         return context
-    select = ", ".join(f'"{column}" AS "{name}"' for name, column in wanted.items())
-    rows = _query(path, f'SELECT {select} FROM read_parquet(?) WHERE MoSPI_record_key = ? AND CAST("{serial}" AS VARCHAR) = ?', [record_key, person])
+    select = ", ".join(f'"{physical[column]}" AS "{name}"' for name, column in wanted.items())
+    rows = _query(path, f'SELECT {select} FROM read_parquet(?) WHERE "{physical["MoSPI_record_key"]}" = ? AND CAST("{physical[serial]}" AS VARCHAR) = ?', [record_key, person])
     if not rows:
         return context
     row = {k: L.clean(v) for k, v in rows[0].items()}
@@ -910,6 +925,9 @@ def summarise_rows(rows: list[dict[str, Any]], resolver: SourceResolver, release
     """Attach one-line plain summaries to queue rows using batched lookups."""
     if not rows:
         return
+    if "tier" in rows[0]:
+        _summarise_lane_rows(rows)
+        return
     provenance = _json(rows[0].get("provenance_json"), {})
     dirs = resolver.directories(release, observation, provenance)
     ids = [r["source_observation_id"] for r in rows]
@@ -971,3 +989,31 @@ def _short_pattern(statement: Any) -> str:
     if "vary less than usual" in text:
         return "values vary less than in comparable FSUs"
     return "the FSU differs from comparable FSUs"
+
+
+def _summarise_lane_rows(rows: list[dict[str, Any]]) -> None:
+    """One-line summaries for lane-design queue rows, from the row's stored fields only."""
+    for row in rows:
+        row["location_label"] = f"{L.state_name(row.get('state'))} · {L.sector_name(row.get('sector'))}"
+        key, _, person = str(row["source_observation_id"]).partition("|person=")
+        parts = key.removesuffix("|household").split("|")
+        household = parts[-1] if parts else "—"
+        row["record_label"] = (f"FSU {row.get('fsu')} · Household {household}" + (f" · Person {person}" if person else " (whole household)"))
+        lanes = [x for x in str(row.get("lanes") or "").split(",") if x]
+        reasons = []
+        if "RULE" in lanes or "RULE_SOFT" in lanes:
+            reasons.append("Questionnaire rule not met: " + str(row.get("rule_ids") or ""))
+        variable = L.clean(row.get("value_lead_variable"))
+        if "VALUE" in lanes and variable:
+            unit = L.variable_unit(variable)
+            short = L.VARIABLES.get(variable, {}).get("short", "value")
+            observed, typical = _num(row.get("value_lead_observed")), _num(row.get("value_lead_typical"))
+            reasons.append(f"Reported {short} {L.format_value(observed, unit)}" + (f" — typical for similar people {L.format_value(typical, unit)}" if typical is not None else ""))
+            row["comparison"] = {"variable": variable, "short": short, "unit": unit, "observed": observed, "typical": typical}
+        if "CODING" in lanes:
+            reasons.append(f"Occupation code {L.clean(row.get('coding_code'))} is rare for comparable people")
+        row["unusual"] = reasons[0] if reasons else "Not flagged by any check"
+        row["why"] = reasons[1:] + (["FSU-level context: the FSU as a whole differs from comparable FSUs"] if row.get("fsu_notable") else [])
+        row["lane_labels"] = [L.LANES.get(x, x) for x in lanes]
+        row["band_label"] = L.PRIORITY_BANDS.get(L.clean(row.get("priority_band")), row.get("priority_band"))
+        row.pop("provenance_json", None)

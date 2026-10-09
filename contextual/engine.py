@@ -20,13 +20,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from peer_groups.config import SOURCE_PROFILES
+from peer_groups.config import SOURCE_PROFILES, derive_context
+from survey_rules.schema import read_parquet
 
 from .config import (
     CONTEXTUAL_METHOD_VERSION,
     CONTEXTUAL_TARGET,
     METHOD_IDENTIFIER,
     METHOD_VERSION,
+    PRIOR_STRENGTH,
     REFERENCE_ASSIGNMENT_TARGET,
     VALID_OCCUPATION_PATTERN,
 )
@@ -68,6 +70,47 @@ def conditional_surprisal(frequency: float | int | None) -> float | None:
     if not math.isfinite(value) or value <= 0:
         return None
     return -math.log(value)
+
+
+def smoothed_tail_probabilities(valid: pd.DataFrame, prior: pd.DataFrame, alpha: float = PRIOR_STRENGTH) -> pd.DataFrame:
+    """Conformal frequency tail probability of each observed code (plan W2.5).
+
+    ``valid``: one row per reference member (peer_group_id, observed_value, cws_status).
+    ``prior``: release-wide code distribution per activity status (cws_status, observed_value, prior_probability).
+
+    For a member with code k in a group of N comparable people (the member
+    included), ``coding_tail_p`` is the share of the group whose code is at
+    most as frequent as k:  sum_{j: c_j <= c_k} c_j / N.  It is the conformal
+    p-value with "how common is my code here" as the score, so under
+    exchangeability a correctly coded person has P(p <= a) <= a, and the
+    smallest value is 1/N.  It depends on the code's *frequency*, not on how
+    many people are compared (audit M1: raw surprisal grew with group size),
+    and a code seen once in a group where many codes are seen once is not
+    surprising.  (An earlier leave-one-out Dirichlet variant treated every
+    singleton as unseen and flagged 1.6% of 2024 records below 0.001; it was
+    replaced before release.)
+
+    ``smoothed_probability`` (display only) is the Dirichlet-smoothed share
+    (c_k + alpha * prior_k) / (N + alpha).
+    """
+    columns = ["peer_group_id", "observed_value", "smoothed_probability", "coding_tail_p"]
+    if valid.empty:
+        return pd.DataFrame(columns=columns)
+    priors = {status: part.set_index("observed_value")["prior_probability"] for status, part in prior.groupby("cws_status", sort=False)}
+    counts = valid.groupby(["peer_group_id", "observed_value"], sort=False).size()
+    statuses = valid.groupby("peer_group_id", sort=False)["cws_status"].agg(lambda s: s.iloc[0] if s.nunique() == 1 else None)
+    rows: list[pd.DataFrame] = []
+    for group_id, group_counts in counts.groupby(level=0, sort=False):
+        observed = group_counts.droplevel(0).astype(float)
+        total = float(observed.sum())
+        ordered = np.sort(observed.to_numpy())
+        prefix = np.concatenate([[0.0], np.cumsum(ordered)])
+        at_most = prefix[np.searchsorted(ordered, observed.to_numpy(), side="right")]
+        prior_k = priors.get(statuses.get(group_id), pd.Series(dtype=float)).reindex(observed.index).fillna(0.0).to_numpy()
+        rows.append(pd.DataFrame({"peer_group_id": group_id, "observed_value": observed.index.astype("string"),
+                                  "smoothed_probability": (observed.to_numpy() + alpha * prior_k) / (total + alpha),
+                                  "coding_tail_p": np.clip(at_most / total, 0.0, 1.0)}))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=columns)
 
 
 class ContextualEngine:
@@ -126,7 +169,9 @@ class ContextualEngine:
             columns.add(source.context_columns["industry_division"])
         if source.release == "2025":
             columns.add("MoSPI_month")
-        frame = pd.read_parquet(self.config.prepared_person_path, columns=sorted(columns))
+        else:
+            columns.add("MoSPI_quarter")
+        frame = read_parquet(self.config.prepared_person_path, columns=sorted(columns))
         result = pd.DataFrame({"source_observation_id": _source_ids(frame, source.person_serial_column)})
         if result["source_observation_id"].duplicated().any():
             raise ContextualFailure("Prepared input cannot provide unique source observation identifiers")
@@ -151,12 +196,10 @@ class ContextualEngine:
         result["design_period"] = _clean(frame["MoSPI_design_period"])
         result["visit"] = _clean(frame["MoSPI_visit"])
         result["month"] = _clean(frame["MoSPI_month"]) if "MoSPI_month" in frame else ""
-        result["state"] = _clean(frame["MoSPI_state"])
-        result["sector"] = _clean(frame["MoSPI_sector"])
-        result["cws_status"] = _clean(frame[source.context_columns["cws_status"]])
-        if "industry_division" in source.context_columns:
-            industry = _clean(frame[source.context_columns["industry_division"]])
-            result["industry_division"] = industry.where(industry.str.fullmatch(r"\d{4,5}"), "").str.slice(0, 2)
+        context = derive_context(frame, source, design_period=str(result["design_period"].iloc[0]) if len(result) else None)
+        for column in ("state", "sector", "cws_status", "industry_division", "quarter"):
+            if column in context:
+                result[column] = context[column].to_numpy()
         result["_reference_target_valid"] = (
             pd.to_numeric(frame[reference_column], errors="coerce").notna()
             if reference_column else pd.Series(False, index=frame.index)
@@ -170,7 +213,7 @@ class ContextualEngine:
             "minimum_group_size", "peer_group_id", "peer_group_size", "grouping_profile", "grouping_dimensions",
             "grouping_values", "backoff_level", "assessability_status", "not_assessable_reason",
         ]
-        result = pd.read_parquet(
+        result = read_parquet(
             self.config.peer_group_run_path / "peer_group_assignments.parquet",
             columns=columns,
             filters=[("target_variable", "=", REFERENCE_ASSIGNMENT_TARGET)],
@@ -286,6 +329,13 @@ class ContextualEngine:
         evidence["conditional_frequency"] = evidence["category_count"] / evidence["reference_count"]
         evidence["category_parent_conditional_frequency"] = evidence["category_parent_count"] / evidence["reference_count"]
         evidence["surprisal"] = evidence["conditional_frequency"].map(conditional_surprisal)
+        statuses = source_values.set_index("source_observation_id")["cws_status"]
+        valid["cws_status"] = valid["source_observation_id"].map(statuses).astype("string")
+        eligible = source_values.loc[source_values["_prepared_ready"] & source_values["observed_value"].notna(), ["cws_status", "observed_value"]]
+        prior = eligible.groupby(["cws_status", "observed_value"], sort=False).size().rename("n").reset_index()
+        prior["prior_probability"] = prior["n"] / prior.groupby("cws_status")["n"].transform("sum")
+        smoothed = smoothed_tail_probabilities(valid[["peer_group_id", "observed_value", "cws_status"]], prior)
+        evidence = evidence.merge(smoothed, on=["peer_group_id", "observed_value"], how="left", validate="many_to_one")
         return evidence
 
     def _build(self, assignments: pd.DataFrame, source_values: pd.DataFrame, references: pd.DataFrame, source: object) -> pd.DataFrame:
@@ -313,7 +363,8 @@ class ContextualEngine:
         output.loc[candidate & ~peer_ready & output["_required_context_missing"], "contextual_assessability_reason"] = "MISSING_CONTEXT"
 
         evidence = self._category_evidence(source_values, references)
-        fields = ["reference_count", "category_count", "category_parent_value", "category_parent_count", "conditional_frequency", "category_parent_conditional_frequency", "surprisal"]
+        fields = ["reference_count", "category_count", "category_parent_value", "category_parent_count", "conditional_frequency", "category_parent_conditional_frequency", "surprisal",
+                  "smoothed_probability", "coding_tail_p"]
         if not evidence.empty:
             indexed = evidence.set_index(["source_observation_id", "peer_group_id"])
             output_keys = pd.MultiIndex.from_frame(output[["source_observation_id", "peer_group_id"]])
@@ -338,10 +389,10 @@ class ContextualEngine:
         )
         output["method_identifier"] = METHOD_IDENTIFIER
         output["method_version"] = METHOD_VERSION
-        output["smoothing_method"] = "none"
-        output["smoothing_parameters"] = pd.NA
+        output["smoothing_method"] = "conformal_frequency_tail; dirichlet share for display"
+        output["smoothing_parameters"] = json.dumps({"display_prior_strength": PRIOR_STRENGTH, "prior": "release-wide occupation distribution within the same activity status"})
         output.replace([np.inf, -np.inf], np.nan, inplace=True)
-        required = ["reference_count", "category_count", "conditional_frequency", "surprisal"]
+        required = ["reference_count", "category_count", "conditional_frequency", "surprisal", "coding_tail_p"]
         if assessable.any() and not np.isfinite(output.loc[assessable, required].to_numpy(dtype=float)).all():
             raise ContextualFailure("Non-finite required contextual evidence")
         return output.drop(columns=["_target_blank", "_target_invalid", "_target_available", "_prepared_ready", "_required_context_missing"])
@@ -368,7 +419,7 @@ class ContextualEngine:
             },
             "runtime_seconds": round(runtime_seconds, 3),
             "warnings": [
-                "No numerical contextual model is implemented in V1.",
+                "The decision score is the conformal frequency tail probability (coding_tail_p); surprisal is retained for comparison only.",
                 "Prepared data has no field-level occupation applicability mask; blank occupation fields are not assessed.",
             ],
             "errors": [],
@@ -404,8 +455,9 @@ class ContextualEngine:
             "observation": prepared["observation"],
             "design_period": prepared["design_period"],
             "target_variables": [CONTEXTUAL_TARGET],
-            "numerical_contextual_method": "NOT_IMPLEMENTED",
-            "smoothing": {"method": "none", "parameters": {}},
+            "decision_score": "coding_tail_p (conformal frequency tail probability within the comparison group)",
+            "smoothing": {"method": "conformal_frequency_tail", "parameters": {"display_prior_strength": PRIOR_STRENGTH,
+                                                                               "prior": "release-wide occupation distribution within the same activity status"}},
             "output_files": ["contextual_evidence.parquet", "contextual_report.json", "contextual_report.md", "run_metadata.json"],
         }
         write_json(output_dir / "contextual_report.json", report)

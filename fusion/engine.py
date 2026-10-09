@@ -1,15 +1,27 @@
-"""Strict provenance-checked V2 evidence fusion over persisted MoSPI outputs.
+"""Strict provenance-checked evidence fusion over persisted MoSPI outputs (v2.1, lanes).
 
-V2 changes (each fixes an audited defect; see fusion/DESIGN.md):
+The V2.0 construction (weighted mean of within-run ranks, max-of-ML, 0.995
+override, x domain-share influence, fixed rank bands) was measured to lose
+about half of the evidence of its own best components and to over-review the
+smallest UTs (docs/10_10_IMPROVEMENT_PLAN.md §5.7).  It is replaced here, in
+place, by separate evidence lanes (plan §8):
 
-* record risk uses record-level evidence only (statistical, contextual, ML,
-  historical); FSU Pattern evidence is group context and never raises an
-  individual record's risk or triggers its override (audit H3);
-* statistical evidence is taken from the statistical layer's own
-  assessability, which excludes questionnaire placeholders (audit C1/M4);
-* influence is a per-variable share of a weighted domain total (audit H2);
-* documented integrity-rule violations are reported as deterministic findings;
-* FSU group alerts are ordered by Benjamini-Hochberg q-values.
+* Rule findings: approved hard rules at person and household level; always
+  "Check now", never mixed into any score.
+* Value checks: per-variable finite-sample tail probabilities from current
+  peers (leave-one-out), earlier periods (out-of-sample) and the
+  expected-value models trained on earlier periods (fusion.lanes); since
+  v2.2 mechanisms that cannot attain the threshold are not counted (Tarone).
+* Coding checks: smoothed conditional tail probability of the occupation code,
+  with its own small share of the budget.
+* Impact (change in the domain estimate in design SEs) orders cases within a
+  tier only (fusion.impact).
+* FSU patterns are group alerts with an FSU-level q-value; they never change a
+  record's position.
+* Isolation Forest and LOF are not read at all (research outputs only).
+
+Stored V2.0 fusion runs remain readable by the API; fusion/legacy.py keeps the
+old construction solely as evaluation baseline A0.
 """
 
 from __future__ import annotations
@@ -24,15 +36,17 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 
+from pattern.engine import FSU_COMBINATION_METHOD, fsu_summary
 from preprocessing.config import CONTRACTS
-from survey_rules import APPLICABLE, WEIGHT_FIELDS, final_quarterly_weight, period_index
+from survey_rules import WEIGHT_FIELDS, final_quarterly_weight, period_index
+from survey_rules.schema import SchemaError, available_columns, read_parquet
 
-from .calibration import percentile_midrank
-from .config import RECORD_SOURCES, FusionParameters
+from .config import VALUE_VARIABLES, FusionParameters
 from .evidence_card import build_evidence_card
-from .influence import calculate_influence, domain_shares
+from .impact import domain_standard_errors, record_impact
+from .lanes import expected_false_alerts_per_1000, record_value_evidence, variable_evidence
+from .queue import build_queue, thresholds, value_threshold
 from .review import initialise
 
 
@@ -74,15 +88,28 @@ def _metadata_identity(metadata: dict[str, Any]) -> tuple[str, str, str, str]:
 
 
 def _preparation_identity(metadata: dict[str, Any]) -> tuple[str, str, str, str]:
-    """Preparation metadata owns its run ID; downstream metadata references it."""
-    return (
-        str(metadata.get("release", "")), str(metadata.get("observation", "")),
-        str(metadata.get("design_period", "")), str(metadata.get("run_id", "")),
-    )
+    return (str(metadata.get("release", "")), str(metadata.get("observation", "")),
+            str(metadata.get("design_period", "")), str(metadata.get("run_id", "")))
+
+
+def _clean(values: pd.Series) -> pd.Series:
+    return values.astype("string").fillna("").str.strip()
+
+
+def _case_id(value: object) -> str:
+    return "case_" + hashlib.sha256(str(value).encode()).hexdigest()[:20]
+
+
+def _read(path: Path, columns: list[str], stage: str, optional: list[str] | None = None) -> pd.DataFrame:
+    try:
+        return read_parquet(path, columns=columns, optional=optional or [])
+    except SchemaError as error:
+        raise FusionFailure(f"The {stage} run at {path.parent} does not provide the evidence this fusion method needs "
+                            f"(it probably predates the current method version; re-run that stage): {error}") from error
 
 
 class FusionEngine:
-    """Fuse immutable evidence artifacts without recomputing source models."""
+    """Fuse immutable evidence artifacts into lanes and a workload-bounded queue."""
 
     def __init__(self, config: RunConfig) -> None:
         optional = lambda p: Path(p) if p else None  # noqa: E731
@@ -93,363 +120,360 @@ class FusionEngine:
             historical_run=optional(config.historical_run), integrity_run=optional(config.integrity_run),
         )
 
+    # ------------------------------------------------------------------ inputs
+
     def _validate(self) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         prep_meta = _read_json(self.config.prepared_persons.parent / "run_metadata.json")
         expected = _preparation_identity(prep_meta)
         if not all(expected):
             raise FusionFailure("Preparation metadata lacks release, observation, design period, or run ID.")
-        artifacts = {"statistical": self.config.statistical_run, "contextual": self.config.contextual_run, "ml": self.config.ml_run}
-        for name in ("pattern", "historical", "integrity"):
-            if getattr(self.config, f"{name}_run"):
-                artifacts[name] = getattr(self.config, f"{name}_run")
+        if self.config.historical_run is None or self.config.integrity_run is None:
+            raise FusionFailure("The lane design needs the historical and integrity runs; both are required.")
+        artifacts = {"statistical": self.config.statistical_run, "contextual": self.config.contextual_run, "ml": self.config.ml_run,
+                     "historical": self.config.historical_run, "integrity": self.config.integrity_run}
+        if self.config.pattern_run:
+            artifacts["pattern"] = self.config.pattern_run
+        required = {"statistical": "statistical_evidence.parquet", "contextual": "contextual_evidence.parquet", "ml": "conditional_model_evidence.parquet",
+                    "pattern": "pattern_evidence.parquet", "historical": "historical_record_evidence.parquet", "integrity": "integrity_violations.parquet"}
         source_meta: dict[str, dict[str, Any]] = {}
         for source, directory in artifacts.items():
             metadata = _read_json(directory / "run_metadata.json")
             observed = _metadata_identity(metadata)
             if observed != expected:
                 raise FusionFailure(f"{source} provenance {observed} does not match preparation provenance {expected}; incompatible runs cannot be merged.")
-            source_meta[source] = metadata
-        required = {"statistical": "statistical_evidence.parquet", "contextual": "contextual_evidence.parquet", "ml": "isolation_forest_evidence.parquet",
-                    "pattern": "pattern_evidence.parquet", "historical": "historical_record_evidence.parquet", "integrity": "integrity_violations.parquet"}
-        for source, directory in artifacts.items():
             if not (directory / required[source]).is_file():
                 raise FusionFailure(f"{source} run lacks required {required[source]}.")
+            source_meta[source] = metadata
         return prep_meta, source_meta
 
-    @staticmethod
-    def _statistical(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-        columns = ["source_observation_id", "target_variable", "statistical_assessability_status", "statistical_assessability_reason",
-                   "target_applicability", "percentile_position", "observed_value", "peer_median", "peer_group_id", "peer_group_size",
-                   "distribution_position", "robust_deviation", "grouping_values"]
-        data = pd.read_parquet(path, columns=columns)
-        numeric = pd.to_numeric(data.percentile_position, errors="coerce")
-        data["source_score"] = (numeric - .5).abs() * 2
-        usable = data.statistical_assessability_status.eq("ASSESSABLE") & data.source_score.notna() & np.isfinite(data.source_score)
-        assessments = data.loc[usable].groupby("source_observation_id", sort=False).source_score.max().rename("statistical_raw_score")
-        ids = data[["source_observation_id"]].drop_duplicates().set_index("source_observation_id")
-        statements = data.loc[usable].sort_values("source_score", ascending=False).drop_duplicates("source_observation_id")
-        summary = ids.join(assessments).reset_index()
-        summary["statistical_details_json"] = "[]"
-        summary = summary.merge(statements[["source_observation_id", "target_variable", "peer_group_size", "percentile_position"]], on="source_observation_id", how="left")
-        summary["statistical_status"] = np.where(summary.statistical_raw_score.notna(), "ASSESSABLE", "NOT_ASSESSABLE")
-        summary["statistical_reason"] = np.where(summary.statistical_raw_score.notna(), None, "NO_ASSESSABLE_APPLICABLE_STATISTICAL_TARGET")
-        summary["statistical_statement"] = np.where(summary.statistical_raw_score.notna(),
-                                                    "Stored peer-conditioned numerical evidence relative to its reference population.",
-                                                    "No applicable value could be compared with similar records.")
-        # Per-target rows for the influence calculation (placeholders excluded via applicability).
-        targets = data[["source_observation_id", "target_variable", "observed_value", "peer_median", "target_applicability"]].copy()
-        targets["peer_median"] = targets["peer_median"].where(usable)
-        targets["applicable"] = targets["target_applicability"].eq(APPLICABLE)
-        return summary, targets
-
-    @staticmethod
-    def _contextual(path: Path) -> pd.DataFrame:
-        columns = ["source_observation_id", "assessability_status", "not_assessable_reason", "surprisal", "frequency_statement"]
-        data = pd.read_parquet(path, columns=columns)
-        data["contextual_raw_score"] = pd.to_numeric(data.surprisal, errors="coerce").replace([np.inf, -np.inf], np.nan)
-        data["contextual_status"] = np.where(data.assessability_status.eq("ASSESSABLE") & data.contextual_raw_score.notna(), "ASSESSABLE", "NOT_ASSESSABLE")
-        data["contextual_reason"] = np.where(data.contextual_status.eq("ASSESSABLE"), None, data.not_assessable_reason.fillna("NO_ASSESSABLE_CONTEXTUAL_EVIDENCE"))
-        data["contextual_statement"] = data.frequency_statement.fillna("No assessable contextual response frequency is available.")
-        data["contextual_details_json"] = "[]"
-        return data.drop(columns=["assessability_status", "not_assessable_reason", "surprisal", "frequency_statement"])
-
-    @staticmethod
-    def _ml(directory: Path) -> pd.DataFrame:
-        pieces: list[pd.DataFrame] = []
-        for filename in ("isolation_forest_evidence.parquet", "lof_evidence.parquet", "conditional_model_evidence.parquet", "similarity_evidence.parquet"):
-            path = directory / filename
-            if not path.is_file():
-                continue
-            data = pd.read_parquet(path, columns=[c for c in ("source_observation_id", "method", "assessability_status", "evidence_rank", "evidence_statement")
-                                                  if c in pq.ParquetFile(path).schema_arrow.names])
-            data["method_rank"] = pd.to_numeric(data.get("evidence_rank"), errors="coerce").replace([np.inf, -np.inf], np.nan)
-            pieces.append(data)
-        if not pieces:
-            raise FusionFailure("ML run contains no readable evidence tables.")
-        data = pd.concat(pieces, ignore_index=True)
-        usable = data.assessability_status.eq("ASSESSABLE") & data.method_rank.notna()
-        raw = data.loc[usable].groupby("source_observation_id", sort=False).method_rank.max().rename("ml_raw_score")
-        ids = data[["source_observation_id"]].drop_duplicates().set_index("source_observation_id")
-        statement = data.loc[usable].sort_values("method_rank", ascending=False).drop_duplicates("source_observation_id")
-        summary = ids.join(raw).reset_index().merge(statement[["source_observation_id", "evidence_statement"]], on="source_observation_id", how="left")
-        summary["ml_details_json"] = "[]"
-        summary["ml_status"] = np.where(summary.ml_raw_score.notna(), "ASSESSABLE", "NOT_ASSESSABLE")
-        summary["ml_reason"] = np.where(summary.ml_raw_score.notna(), None, "NO_NUMERIC_ASSESSABLE_ML_EVIDENCE")
-        summary["ml_statement"] = summary.evidence_statement.fillna("No numeric assessable ML evidence is available.")
-        return summary.drop(columns=["evidence_statement"])
-
-    @staticmethod
-    def _historical(directory: Path) -> pd.DataFrame:
-        data = pd.read_parquet(directory / "historical_record_evidence.parquet",
-                               columns=["source_observation_id", "target_variable", "assessability_status", "historical_score", "reference_periods"])
-        usable = data.assessability_status.eq("ASSESSABLE") & data.historical_score.notna()
-        raw = data.loc[usable].groupby("source_observation_id", sort=False).historical_score.max().rename("historical_raw_score")
-        ids = data[["source_observation_id"]].drop_duplicates().set_index("source_observation_id")
-        summary = ids.join(raw).reset_index()
-        summary["historical_status"] = np.where(summary.historical_raw_score.notna(), "ASSESSABLE", "NOT_ASSESSABLE")
-        summary["historical_reason"] = np.where(summary.historical_raw_score.notna(), None, "NO_COMPARABLE_EARLIER_PERIOD_EVIDENCE")
-        summary["historical_statement"] = np.where(summary.historical_raw_score.notna(), "Compared with similar people interviewed in earlier periods.",
-                                                   "No comparable earlier-period information is available.")
-        summary["historical_details_json"] = "[]"
-        return summary
-
-    @staticmethod
-    def _integrity(directory: Path) -> pd.DataFrame:
-        data = pd.read_parquet(directory / "integrity_violations.parquet")
-        if data.empty:
-            return pd.DataFrame(columns=["source_observation_id", "rule_violation_count", "rule_error_count", "rule_ids"])
-        grouped = data.groupby("source_observation_id")
-        return pd.DataFrame({"rule_violation_count": grouped.size(), "rule_error_count": grouped.severity.apply(lambda s: int(s.eq("error").sum())),
-                             "rule_ids": grouped.rule_id.apply(lambda s: ",".join(sorted(set(s))))}).reset_index()
-
-    @staticmethod
-    def _pattern(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-        columns = [*PATTERN_KEYS, "pattern_component", "variable", "evidence_rank", "assessability_status", "evidence_statement", "q_value"]
-        available = pq.ParquetFile(path).schema_arrow.names
-        data = pd.read_parquet(path, columns=[c for c in columns if c in available])
-        if "q_value" not in data:
-            data["q_value"] = np.nan
-        usable = data.assessability_status.eq("ASSESSABLE") & pd.to_numeric(data.evidence_rank, errors="coerce").notna()
-        u = data.loc[usable].copy()
-        u["q_value"] = pd.to_numeric(u.q_value, errors="coerce")
-        grouped = u.groupby(PATTERN_KEYS, sort=False, dropna=False)
-        summary = pd.DataFrame({
-            "pattern_raw_score": grouped.evidence_rank.max(), "pattern_min_q": grouped.q_value.min(),
-            "pattern_notable_checks": grouped.q_value.apply(lambda q: int(q.lt(0.05).sum())), "pattern_checks": grouped.size(),
-        }).reset_index()
-        statement = u.sort_values(["q_value", "evidence_rank"], ascending=[True, False]).drop_duplicates(PATTERN_KEYS)[PATTERN_KEYS + ["evidence_statement"]]
-        summary = summary.merge(statement, on=PATTERN_KEYS, how="left").rename(columns={"evidence_statement": "pattern_statement"})
-        keys = data[PATTERN_KEYS].drop_duplicates()
-        summary = keys.merge(summary, on=PATTERN_KEYS, how="left")
-        summary["pattern_status"] = np.where(summary.pattern_raw_score.notna(), "ASSESSABLE", "NOT_ASSESSABLE")
-        summary["pattern_reason"] = np.where(summary.pattern_raw_score.notna(), None, "NO_ASSESSABLE_GROUP_PATTERN_EVIDENCE")
-        summary["pattern_statement"] = summary.pattern_statement.fillna("No assessable FSU-level pattern evidence is available.")
-        summary["pattern_details_json"] = "[]"
-        return summary, data
-
-    def _prepared_identity(self, prep_meta: dict[str, Any]) -> pd.DataFrame:
-        release, observation, _, _ = _metadata_identity(prep_meta)
+    def _identity(self, prep_meta: dict[str, Any]) -> pd.DataFrame:
+        release, observation, design, _ = _preparation_identity(prep_meta)
         contract = next((c for c in CONTRACTS.values() if c.release == release and c.observation == observation), None)
         if contract is None:
             raise FusionFailure(f"No documented preparation contract for {release}/{observation}.")
         serial = contract.person_fields[contract.person_serial]
         weights = WEIGHT_FIELDS.get((release, observation), {})
-        requested = ["MoSPI_record_key", "MoSPI_source_row", "MoSPI_release", "MoSPI_observation", "MoSPI_design_period", "MoSPI_visit", "MoSPI_month",
-                     "MoSPI_quarter", "MoSPI_state", "MoSPI_sector", "MoSPI_stratum", "MoSPI_fsu", "MoSPI_weight", serial,
-                     *[c for c in weights.values() if c]]
-        schema = pq.ParquetFile(self.config.prepared_persons).schema_arrow.names
-        frame = pd.read_parquet(self.config.prepared_persons, columns=[column for column in dict.fromkeys(requested) if column in schema])
-        if serial not in frame or "MoSPI_record_key" not in frame:
-            raise FusionFailure("Prepared persons file lacks the documented source identity fields.")
-        for column in ("MoSPI_month", "MoSPI_quarter", "MoSPI_state", "MoSPI_sector", "MoSPI_stratum", "MoSPI_fsu"):
-            if column not in frame:
-                frame[column] = ""
-        serial_text = frame[serial].astype("string").fillna("").str.strip()
-        fallback = frame["MoSPI_source_row"].astype("string") if "MoSPI_source_row" in frame else serial_text
-        frame["source_observation_id"] = frame.MoSPI_record_key.astype(str) + "|person=" + serial_text.mask(serial_text.eq(""), fallback).astype(str)
+        required = ["MoSPI_record_key", "MoSPI_source_row", "MoSPI_release", "MoSPI_observation", "MoSPI_design_period", "MoSPI_visit",
+                    "MoSPI_quarter", "MoSPI_state", "MoSPI_sector", "MoSPI_stratum", "MoSPI_fsu", serial, contract.person_fields["district"],
+                    *[c for c in weights.values() if c]]
+        if design == "post_2025":
+            required.append("MoSPI_month")
+        frame = _read(self.config.prepared_persons, list(dict.fromkeys(required)), "preparation")
+        serial_text = _clean(frame[serial])
+        frame["source_observation_id"] = _clean(frame["MoSPI_record_key"]) + "|person=" + serial_text.mask(serial_text.eq(""), _clean(frame["MoSPI_source_row"]))
         if frame.source_observation_id.duplicated().any():
             raise FusionFailure("Prepared persons source observation IDs are not unique; fusion cannot safely attach evidence.")
         nss = frame[weights["nss"]] if weights.get("nss") in frame else None
         nsc = frame[weights["nsc"]] if weights.get("nsc") in frame else None
-        frame["final_weight"] = final_quarterly_weight(release, frame[weights["mult"]], nss, nsc) if weights.get("mult") in frame else np.nan
-        frame["period_index"] = [period_index(release, q, m) for q, m in zip(frame["MoSPI_quarter"].astype(str), frame["MoSPI_month"].astype(str))]
-        frame = frame.rename(columns={"MoSPI_release": "release", "MoSPI_observation": "observation_type", "MoSPI_design_period": "design_period",
-                                      "MoSPI_visit": "visit", "MoSPI_month": "month", "MoSPI_state": "state", "MoSPI_sector": "sector",
-                                      "MoSPI_stratum": "stratum", "MoSPI_fsu": "fsu", "MoSPI_weight": "design_weight"})
-        for column in ("month", "state", "sector", "stratum", "fsu", "visit"):
-            frame[column] = frame[column].astype("string").fillna("").str.strip()
-        return frame[["source_observation_id", "release", "observation_type", "design_period", "visit", "month", "state", "sector", "stratum", "fsu",
-                      "design_weight", "final_weight", "period_index"]]
+        output = pd.DataFrame({
+            "source_observation_id": frame["source_observation_id"], "household_key": _clean(frame["MoSPI_record_key"]),
+            "release": _clean(frame["MoSPI_release"]), "observation_type": _clean(frame["MoSPI_observation"]),
+            "design_period": _clean(frame["MoSPI_design_period"]), "visit": _clean(frame["MoSPI_visit"]),
+            "month": _clean(frame["MoSPI_month"]) if "MoSPI_month" in frame else "", "quarter": _clean(frame["MoSPI_quarter"]),
+            "state": _clean(frame["MoSPI_state"]), "sector": _clean(frame["MoSPI_sector"]), "stratum": _clean(frame["MoSPI_stratum"]),
+            "fsu": _clean(frame["MoSPI_fsu"]), "district": _clean(frame[contract.person_fields["district"]]),
+            "final_weight": final_quarterly_weight(release, frame[weights["mult"]], nss, nsc),
+        })
+        output["period_index"] = [period_index(release, q, m) for q, m in zip(output["quarter"], output["month"])]
+        for column in ("release", "state", "sector"):
+            if output[column].eq("").all():
+                raise FusionFailure(f"Prepared persons have no {column} values; refusing to build a queue.")
+        return output
 
-    def _band(self, score: Any) -> str:
-        if pd.isna(score):
-            return "NOT_ASSESSABLE"
-        for band, threshold in self.config.parameters.priority_bands:
-            if float(score) >= threshold:
-                return band
-        return "LOW"
+    def _value_rows(self, use_model: bool) -> pd.DataFrame:
+        stat = _read(self.config.statistical_run / "statistical_evidence.parquet",
+                     ["source_observation_id", "target_variable", "statistical_assessability_status", "target_applicability", "observed_value",
+                      "peer_median", "quantile_0_05", "quantile_0_25", "quantile_0_75", "quantile_0_95", "peer_group_size", "loo_reference_size",
+                      "two_sided_tail_p", "tail_direction", "grouping_values", "grouping_dimensions"], "statistical")
+        stat = stat.loc[stat["target_variable"].isin(VALUE_VARIABLES)]
+        assessed = stat["statistical_assessability_status"].eq("ASSESSABLE")
+        rows = stat.rename(columns={"observed_value": "observed_value", "two_sided_tail_p": "p_current", "tail_direction": "current_direction",
+                                    "quantile_0_05": "current_q05", "quantile_0_25": "current_q25", "quantile_0_75": "current_q75",
+                                    "quantile_0_95": "current_q95", "loo_reference_size": "current_n"})
+        for column in ("p_current", "peer_median", "current_q05", "current_q25", "current_q75", "current_q95", "current_n"):
+            rows[column] = pd.to_numeric(rows[column], errors="coerce").where(assessed)
+        rows["applicable"] = rows["target_applicability"].eq("APPLICABLE")
+        hist = _read(self.config.historical_run / "historical_record_evidence.parquet",
+                     ["source_observation_id", "target_variable", "assessability_status", "two_sided_tail_p", "tail_direction", "reference_median",
+                      "quantile_0_05", "quantile_0_95", "reference_size", "reference_periods", "period_label", "same_season_two_sided_tail_p",
+                      "same_season_median", "same_season_period"], "historical")
+        hist = hist.loc[hist["assessability_status"].eq("ASSESSABLE")].rename(columns={
+            "two_sided_tail_p": "p_history", "tail_direction": "history_direction", "reference_median": "history_median", "quantile_0_05": "history_q05",
+            "quantile_0_95": "history_q95", "reference_size": "history_n", "same_season_two_sided_tail_p": "p_same_season"}).drop(columns="assessability_status")
+        rows = rows.merge(hist, on=["source_observation_id", "target_variable"], how="left", validate="one_to_one")
+        if use_model:
+            model = _read(self.config.ml_run / "conditional_model_evidence.parquet",
+                          ["source_observation_id", "target", "assessability_status", "model_tail_p", "predicted_value", "usual_range_low",
+                           "usual_range_high", "training_scheme", "training_periods"], "ML (conditional models)")
+            model = model.loc[model["assessability_status"].eq("ASSESSABLE")].rename(columns={
+                "target": "target_variable", "model_tail_p": "p_model", "predicted_value": "model_estimate", "usual_range_low": "model_low",
+                "usual_range_high": "model_high", "training_scheme": "model_training_scheme", "training_periods": "model_training_periods"}).drop(columns="assessability_status")
+            rows = rows.merge(model, on=["source_observation_id", "target_variable"], how="left", validate="one_to_one")
+        else:
+            rows["p_model"] = np.nan
+        # Evidence only for applicable values (placeholders never count).
+        for column in ("p_current", "p_history", "p_model"):
+            rows[column] = pd.to_numeric(rows[column], errors="coerce").where(rows["applicable"])
+        return rows.drop(columns=["statistical_assessability_status", "target_applicability"])
 
-    def fuse(self, cases: pd.DataFrame) -> pd.DataFrame:
-        """Risk, influence-independent priority logic on an assembled case table (pure; used by evaluation)."""
-        p = self.config.parameters
-        for source in RECORD_SOURCES:
-            raw, rank, status = f"{source}_raw_score", f"{source}_rank", f"{source}_status"
-            if raw not in cases:
-                cases[raw] = np.nan
-            if status not in cases:
-                cases[status] = "NOT_AVAILABLE"
-            cases[rank] = percentile_midrank(cases[raw], zero_is_no_evidence=(source == "statistical"))
-            cases.loc[cases[rank].isna() & cases[status].eq("ASSESSABLE"), status] = "NOT_ASSESSABLE"
-            if f"{source}_reason" not in cases:
-                cases[f"{source}_reason"] = None
-        rank_columns = [f"{source}_rank" for source in RECORD_SOURCES]
-        weights = p.source_weights
-        numerator = sum(cases[f"{s}_rank"].fillna(0) * weights[s] for s in RECORD_SOURCES)
-        denominator = sum(cases[f"{s}_rank"].notna() * weights[s] for s in RECORD_SOURCES)
-        cases["available_evidence_count"] = cases[rank_columns].notna().sum(axis=1)
-        cases["weighted_risk_score"] = np.where(denominator > 0, numerator / np.where(denominator > 0, denominator, 1), np.nan)
-        cases["maximum_available_rank"] = cases[rank_columns].max(axis=1)
-        cases["override_applied"] = cases.maximum_available_rank.ge(p.override_rank_threshold)
-        cases["risk_score"] = np.where(cases.override_applied, np.maximum(cases.weighted_risk_score, cases.maximum_available_rank), cases.weighted_risk_score)
-        rule_errors = pd.to_numeric(cases.get("rule_error_count", 0), errors="coerce").fillna(0)
-        cases["rule_violation"] = rule_errors.gt(0)
-        cases["risk_status"] = np.where(pd.notna(cases.risk_score), "ASSESSABLE", "NOT_ASSESSABLE")
-        cases["priority_score"] = np.where(pd.notna(cases.risk_score) & cases.influence_score.notna(), cases.risk_score * cases.influence_score, np.nan)
-        # A documented-rule breach is a definite inconsistency: it is reviewed first, whatever its size.
-        cases.loc[cases.rule_violation, "priority_score"] = 1.0
-        cases["priority_rank"] = percentile_midrank(cases.priority_score)
-        cases["priority_band"] = cases.priority_score.map(self._band)
-        return cases
+    def _coding(self) -> pd.DataFrame:
+        data = _read(self.config.contextual_run / "contextual_evidence.parquet",
+                     ["source_observation_id", "contextual_assessability_status", "coding_tail_p", "observed_value", "category_count", "reference_count"],
+                     "contextual")
+        usable = data["contextual_assessability_status"].eq("ASSESSABLE")
+        return pd.DataFrame({"source_observation_id": data["source_observation_id"],
+                             "coding_p": pd.to_numeric(data["coding_tail_p"], errors="coerce").where(usable),
+                             "coding_code": data["observed_value"].where(usable),
+                             "coding_count": pd.to_numeric(data["category_count"], errors="coerce").where(usable),
+                             "coding_reference": pd.to_numeric(data["reference_count"], errors="coerce").where(usable)})
+
+    def _rules(self) -> pd.DataFrame:
+        data = read_parquet(self.config.integrity_run / "integrity_violations.parquet")
+        if "level" not in data:
+            data["level"] = "person"
+        return data
+
+    # ------------------------------------------------------------------ run
 
     def run(self) -> Path:
         started = time.perf_counter()
+        p = self.config.parameters
         prep_meta, source_meta = self._validate()
-        base = self._prepared_identity(prep_meta)
-        stat, stat_targets = self._statistical(self.config.statistical_run / "statistical_evidence.parquet")
-        sources = [stat, self._contextual(self.config.contextual_run / "contextual_evidence.parquet"), self._ml(self.config.ml_run)]
-        if self.config.historical_run:
-            sources.append(self._historical(self.config.historical_run))
+        base = self._identity(prep_meta)
         known = set(base.source_observation_id)
-        for source in sources:
-            unknown = set(source.source_observation_id) - known
-            if unknown:
-                raise FusionFailure(f"Evidence cannot be mapped to the supplied prepared persons run ({len(unknown)} unknown source IDs).")
-        cases = base
-        for source in sources:
-            cases = cases.merge(source, on="source_observation_id", how="left")
-        if not self.config.historical_run:
-            cases["historical_status"] = "NOT_AVAILABLE"; cases["historical_reason"] = "HISTORICAL_RUN_NOT_SUPPLIED"
-            cases["historical_statement"] = "No historical run was supplied."; cases["historical_details_json"] = "[]"
-        if self.config.integrity_run:
-            integrity = self._integrity(self.config.integrity_run)
-            cases = cases.merge(integrity, on="source_observation_id", how="left")
-            cases["rule_violation_count"] = cases["rule_violation_count"].fillna(0).astype(int)
-            cases["rule_error_count"] = cases["rule_error_count"].fillna(0).astype(int)
-            cases["rules_status"] = "CHECKED"
-        else:
-            cases["rule_violation_count"] = 0; cases["rule_error_count"] = 0; cases["rule_ids"] = None; cases["rules_status"] = "NOT_AVAILABLE"
-        pattern_rows = None
-        if self.config.pattern_run:
-            pattern, pattern_rows = self._pattern(self.config.pattern_run / "pattern_evidence.parquet")
-            cases = cases.merge(pattern, on=PATTERN_KEYS, how="left")
-            cases["pattern_status"] = cases["pattern_status"].fillna("NOT_ASSESSABLE")
-        else:
-            cases["pattern_raw_score"] = np.nan; cases["pattern_min_q"] = np.nan; cases["pattern_notable_checks"] = 0; cases["pattern_checks"] = 0
-            cases["pattern_status"] = "NOT_AVAILABLE"; cases["pattern_reason"] = "PATTERN_RUN_NOT_SUPPLIED"
-            cases["pattern_statement"] = "No compatible Pattern run was supplied for this fusion run."; cases["pattern_details_json"] = "[]"
-        # FSU context only: displayed, never part of record risk.
-        cases["pattern_rank"] = percentile_midrank(cases["pattern_raw_score"])
 
-        shares_input = stat_targets.merge(base[["source_observation_id", "final_weight", "release", "period_index", "state", "sector"]], on="source_observation_id", how="left")
-        shares_input["domain"] = shares_input["release"].astype(str) + "|" + shares_input["period_index"].astype(str) + "|" + shares_input["state"].astype(str) + "|" + shares_input["sector"].astype(str)
-        shares = domain_shares(shares_input)
-        cases = calculate_influence(cases, shares)
-        cases = self.fuse(cases)
-        cases["case_id"] = cases.source_observation_id.map(lambda value: "case_" + hashlib.sha256(str(value).encode()).hexdigest()[:20])
-        provenance = {
-            "preprocessing_run_id": prep_meta["run_id"],
-            **{f"{name}_run_id": source_meta.get(name, {}).get("run_id") for name in ("statistical", "contextual", "ml", "pattern", "historical", "integrity")},
-            "fusion_version": self.config.parameters.fusion_version, "calibration_version": self.config.parameters.calibration_version,
-            "influence_version": self.config.parameters.influence_version,
-        }
+        rows = self._value_rows(p.use_conditional_model)
+        # The value threshold depends only on counts (records, value-assessable records), so it is known
+        # before the evidence is combined; the discrete-test correction needs it (fusion.lanes).
+        has_mechanism = rows[["p_current", "p_history", "p_model"]].notna().any(axis=1)
+        limit = value_threshold(p, len(base), int(rows.loc[has_mechanism, "source_observation_id"].nunique()))
+        variables = variable_evidence(rows, limit if p.discrete_test_correction else None)
+        unknown = set(variables.source_observation_id) - known
+        if unknown:
+            raise FusionFailure(f"Value evidence cannot be mapped to the supplied prepared persons run ({len(unknown)} unknown source IDs).")
+        value = record_value_evidence(variables)
+
+        # Impact of each applicable value on its domain mean, in design SEs.
+        geo = base[["source_observation_id", "final_weight", "release", "period_index", "state", "sector", "stratum", "fsu"]]
+        impact_input = variables.loc[variables["applicable"] & variables["observed_value"].notna()].merge(geo, on="source_observation_id", how="left")
+        impact_input["value"] = pd.to_numeric(impact_input["observed_value"], errors="coerce")
+        impact_input["expected_value"] = impact_input["peer_median"].fillna(impact_input["history_median"])
+        if "model_estimate" in impact_input:
+            impact_input["expected_value"] = impact_input["expected_value"].fillna(impact_input["model_estimate"])
+        impact_input["domain"] = impact_input["release"] + "|" + impact_input["period_index"].astype(str) + "|" + impact_input["state"] + "|" + impact_input["sector"]
+        impact_input["stratum_key"] = impact_input["state"] + "|" + impact_input["sector"] + "|" + impact_input["stratum"]
+        impact_input["psu_key"] = impact_input["stratum_key"] + "|" + impact_input["fsu"]
+        domains = domain_standard_errors(impact_input)
+        impacts = record_impact(impact_input, domains) if len(domains) else impact_input.assign(impact_se=np.nan, estimate_change=np.nan, domain_mean=np.nan, effective_se=np.nan)
+        variables = variables.merge(impacts[["source_observation_id", "target_variable", "expected_value", "estimate_change", "domain_mean", "effective_se", "impact_se"]],
+                                    on=["source_observation_id", "target_variable"], how="left")
+
+        cases = base.merge(value, on="source_observation_id", how="left").merge(self._coding(), on="source_observation_id", how="left")
+        lead_impact = variables[["source_observation_id", "target_variable", "impact_se", "estimate_change", "effective_se"]].rename(
+            columns={"target_variable": "value_lead_variable", "estimate_change": "impact_estimate_change", "effective_se": "impact_domain_se"})
+        cases = cases.merge(lead_impact, on=["source_observation_id", "value_lead_variable"], how="left")
+        lead_rows = variables.set_index(["source_observation_id", "target_variable"])
+        keys = pd.MultiIndex.from_arrays([cases["source_observation_id"], cases["value_lead_variable"]])
+        for column, name in (("strongest_mechanism", "value_lead_mechanism"), ("current_direction", "value_lead_direction"),
+                             ("observed_value", "value_lead_observed"), ("peer_median", "value_lead_typical")):
+            cases[name] = lead_rows[column].reindex(keys).to_numpy() if column in lead_rows else np.nan
+        cases["value_status"] = np.where(cases["value_p"].notna(), "ASSESSABLE", "NOT_ASSESSABLE")
+        cases["coding_status"] = np.where(cases["coding_p"].notna(), "ASSESSABLE", "NOT_ASSESSABLE")
+        cases["case_level"] = "PERSON"
+
+        # Rule findings: person level onto persons; household level as household cases.
+        rules = self._rules()
+        person_rules = rules.loc[rules["level"].eq("person")]
+        if len(person_rules):
+            grouped = person_rules.groupby("source_observation_id")
+            counts = pd.DataFrame({"rule_error_count": grouped["severity"].apply(lambda s: int(s.eq("error").sum())),
+                                   "rule_warning_count": grouped["severity"].apply(lambda s: int(s.eq("warning").sum())),
+                                   "rule_ids": grouped["rule_id"].apply(lambda s: ",".join(sorted(set(s))))}).reset_index()
+            cases = cases.merge(counts, on="source_observation_id", how="left")
+        household_rules = rules.loc[rules["level"].eq("household")]
+        if len(household_rules):
+            household_rules = household_rules.assign(household_key=household_rules["source_observation_id"].str.removesuffix("|household"))
+            identity = base.drop_duplicates("household_key").set_index("household_key")
+            grouped = household_rules.groupby("household_key")
+            household_cases = identity.loc[identity.index.intersection(grouped.size().index), ["release", "observation_type", "design_period", "visit", "month",
+                                                                                                  "quarter", "state", "sector", "stratum", "fsu", "district", "period_index"]].reset_index()
+            household_cases["source_observation_id"] = household_cases["household_key"] + "|household"
+            household_cases["case_level"] = "HOUSEHOLD"
+            household_cases["rule_error_count"] = household_cases["household_key"].map(grouped["severity"].apply(lambda s: int(s.eq("error").sum())))
+            household_cases["rule_warning_count"] = household_cases["household_key"].map(grouped["severity"].apply(lambda s: int(s.eq("warning").sum())))
+            household_cases["rule_ids"] = household_cases["household_key"].map(grouped["rule_id"].apply(lambda s: ",".join(sorted(set(s)))))
+            household_cases["value_status"] = "NOT_APPLICABLE"
+            household_cases["coding_status"] = "NOT_APPLICABLE"
+            cases = pd.concat([cases, household_cases], ignore_index=True)
+        for column in ("rule_error_count", "rule_warning_count"):
+            values = cases[column] if column in cases else pd.Series(0, index=cases.index)
+            cases[column] = pd.to_numeric(values, errors="coerce").fillna(0).astype(int)
+        if "rule_ids" not in cases:
+            cases["rule_ids"] = None
+        cases["rule_violation"] = cases["rule_error_count"].gt(0)
+        cases["rules_status"] = "CHECKED"
+
+        # FSU group context (never part of a record's position).
+        groups_source = None
+        if self.config.pattern_run:
+            summary_path = self.config.pattern_run / "fsu_summary.parquet"
+            stored = read_parquet(summary_path) if summary_path.is_file() else None
+            if stored is not None and "method" in stored and stored["method"].astype(str).eq(FSU_COMBINATION_METHOD).all():
+                groups_source = stored
+            else:  # pattern run made with an earlier FSU combination: combine its stored checks with the current one
+                groups_source = fsu_summary(read_parquet(self.config.pattern_run / "pattern_evidence.parquet"), p.group_alert_q)
+            context = groups_source[[*PATTERN_KEYS, "fsu_q_value", "notable", "strongest_statement", "fieldwork_signal"]].rename(
+                columns={"notable": "fsu_notable", "strongest_statement": "fsu_statement", "fieldwork_signal": "fsu_fieldwork_signal"})
+            for column in PATTERN_KEYS:
+                context[column] = _clean(context[column])
+            cases = cases.merge(context.drop_duplicates(PATTERN_KEYS), on=PATTERN_KEYS, how="left")
+            cases["pattern_status"] = np.where(cases["fsu_q_value"].notna(), "ASSESSABLE", "NOT_ASSESSABLE")
+        else:
+            cases["fsu_q_value"] = np.nan; cases["fsu_notable"] = False; cases["fsu_statement"] = None; cases["fsu_fieldwork_signal"] = False
+            cases["pattern_status"] = "NOT_AVAILABLE"
+        cases["fsu_notable"] = cases["fsu_notable"].fillna(False).astype(bool)
+
+        cases["case_id"] = cases["source_observation_id"].map(_case_id)
+        cases = build_queue(cases, p)
+        queue_summary = dict(cases.attrs.get("queue_summary", {}))
+        if p.discrete_test_correction and not np.isclose(queue_summary.get("value_threshold", np.nan), limit, rtol=0, atol=1e-15):
+            raise FusionFailure(f"Value threshold used for the discrete-test correction ({limit}) differs from the queue's ({queue_summary.get('value_threshold')}).")
+        queue_summary["discrete_test_correction"] = bool(p.discrete_test_correction)
+        provenance = {"preprocessing_run_id": prep_meta["run_id"],
+                      **{f"{name}_run_id": source_meta.get(name, {}).get("run_id") for name in ("statistical", "contextual", "ml", "pattern", "historical", "integrity")},
+                      "fusion_version": p.fusion_version, "calibration_version": p.calibration_version, "impact_version": p.impact_version}
         cases["provenance_json"] = json.dumps(provenance, sort_keys=True)
-        for source in (*RECORD_SOURCES, "pattern"):
-            if f"{source}_details_json" not in cases:
-                cases[f"{source}_details_json"] = "[]"
-        cases["evidence_card_json"] = ""
-        card_rows = cases.loc[cases.priority_score.notna()].nlargest(self.config.parameters.evidence_card_capacity, "priority_score")
-        evidence_cards = pd.DataFrame({"case_id": card_rows.case_id, "evidence_card_json": card_rows.apply(lambda row: json.dumps(build_evidence_card(row), default=str, sort_keys=True), axis=1)})
-        groups = self._groups(cases, pattern_rows)
+        groups = self._groups(cases, groups_source)
+
         run_id = self.config.run_id or str(uuid.uuid4())
         destination = self.config.output_root / f"{prep_meta['release']}_{prep_meta['observation']}_{run_id}"
         destination.mkdir(parents=True, exist_ok=False)
-        cases.sort_values(["priority_score", "source_observation_id"], ascending=[False, True], na_position="last").to_parquet(destination / "fused_cases.parquet", index=False)
-        evidence_cards.to_parquet(destination / "evidence_cards.parquet", index=False)
+        cases.sort_values("queue_position", kind="mergesort").to_parquet(destination / "fused_cases.parquet", index=False)
+        variables["case_id"] = variables["source_observation_id"].map(_case_id)
+        variables.to_parquet(destination / "value_evidence.parquet", index=False)
+        if len(domains):
+            domains.to_parquet(destination / "impact_domains.parquet", index=False)
         groups.to_parquet(destination / "group_priorities.parquet", index=False)
-        shares[["source_observation_id", "target_variable", "local_score", "domain", "domain_total"]].dropna(subset=["local_score"]).to_parquet(destination / "influence_components.parquet", index=False)
+        in_queue = cases.loc[cases["tier"].isin(["A", "B"])].nsmallest(p.evidence_card_capacity, "queue_position")
+        evidence_cards = pd.DataFrame({"case_id": in_queue["case_id"], "evidence_card_json": [json.dumps(build_evidence_card(row), default=str, sort_keys=True)
+                                                                                             for _, row in in_queue.iterrows()]})
+        evidence_cards.to_parquet(destination / "evidence_cards.parquet", index=False)
         initialise(destination / "review_audit.sqlite")
-        assessable = int(cases.risk_status.eq("ASSESSABLE").sum())
-        summary = {
-            "records_processed": int(len(cases)), "assessable_records": assessable, "not_assessable_records": int(len(cases) - assessable),
-            "priority_rows": int(cases.priority_score.notna().sum()), "group_priority_rows": int(groups.group_priority_score.notna().sum()) if len(groups) else 0,
-            "notable_groups": int(groups.group_priority_band.isin(["HIGH", "MEDIUM"]).sum()) if len(groups) else 0,
-            "rule_violation_records": int(cases.rule_violation.sum()),
-            "source_availability": {source: int(cases[f"{source}_status"].eq("ASSESSABLE").sum()) for source in (*RECORD_SOURCES, "pattern")},
-            "influence_availability": int(cases.influence_status.eq("ASSESSABLE").sum()),
-            "risk_distribution": _distribution(cases.risk_score), "influence_distribution": _distribution(cases.influence_score),
-            "priority_distribution": _distribution(cases.priority_score),
-            "band_counts": {str(k): int(v) for k, v in cases.priority_band.value_counts().items()},
-            "runtime_seconds": round(time.perf_counter() - started, 3),
-        }
+
+        summary = self._report(cases, groups, queue_summary, time.perf_counter() - started)
+        summary["burden"]["calibration_by_mechanism"] = calibration_by_mechanism(variables, queue_summary["value_threshold"])
         metadata = {"run_id": run_id, "release": prep_meta["release"], "observation": prep_meta["observation"], "design_period": prep_meta["design_period"],
                     "input_preprocessing_run_id": prep_meta["run_id"], "source_runs": {name: value.get("run_id") for name, value in source_meta.items()},
-                    "fusion_version": self.config.parameters.fusion_version,
-                    "parameters": {"source_weights": self.config.parameters.source_weights, "override_rank_threshold": self.config.parameters.override_rank_threshold,
-                                   "priority_bands": self.config.parameters.priority_bands, "group_bands": self.config.parameters.group_bands,
-                                   "evidence_card_capacity": self.config.parameters.evidence_card_capacity, "influence_version": self.config.parameters.influence_version,
-                                   "calibration_version": self.config.parameters.calibration_version},
-                    "output_files": ["fused_cases.parquet", "evidence_cards.parquet", "group_priorities.parquet", "influence_components.parquet",
-                                     "fusion_report.json", "fusion_report.md", "review_audit.sqlite", "run_metadata.json"]}
-        (destination / "fusion_report.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-        (destination / "run_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+                    "fusion_version": p.fusion_version, "parameters": dict(p.__dict__), "queue": queue_summary,
+                    "output_files": ["fused_cases.parquet", "value_evidence.parquet", "impact_domains.parquet", "evidence_cards.parquet",
+                                     "group_priorities.parquet", "fusion_report.json", "fusion_report.md", "review_audit.sqlite", "run_metadata.json"]}
+        (destination / "fusion_report.json").write_text(json.dumps(summary, indent=2, sort_keys=True, default=float), encoding="utf-8")
+        (destination / "run_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True, default=float), encoding="utf-8")
         (destination / "fusion_report.md").write_text(_markdown_report(metadata, summary), encoding="utf-8")
         return destination
 
-    def _groups(self, cases: pd.DataFrame, pattern_rows: pd.DataFrame | None) -> pd.DataFrame:
-        group = cases.groupby(PATTERN_KEYS, dropna=False, sort=False).agg(
-            records=("case_id", "size"), assessable_records=("risk_status", lambda x: int(x.eq("ASSESSABLE").sum())),
-            max_pattern_rank=("pattern_raw_score", "max"), pattern_min_q=("pattern_min_q", "min"),
-            notable_checks=("pattern_notable_checks", "max"), pattern_checks=("pattern_checks", "max"),
-            max_risk_score=("risk_score", "max"), max_priority_score=("priority_score", "max"), mean_influence_score=("influence_score", "mean"),
-        ).reset_index()
-        q = pd.to_numeric(group.pattern_min_q, errors="coerce")
+    def _report(self, cases: pd.DataFrame, groups: pd.DataFrame, queue_summary: dict[str, Any], runtime: float) -> dict[str, Any]:
+        p = self.config.parameters
+        persons = cases.loc[cases["case_level"].eq("PERSON")]
+        limits = {"value": queue_summary.get("value_threshold", thresholds(p)["value"]), "coding": queue_summary.get("coding_threshold", thresholds(p)["coding"])}
+        value_share = float(persons["value_p"].notna().mean()) if len(persons) else 0.0
+        coding_share = float(persons["coding_p"].notna().mean()) if len(persons) else 0.0
+        observed_value_rate = float(persons["value_p"].le(limits["value"]).mean() * 1000) if len(persons) else 0.0
+        nominal_value_rate = expected_false_alerts_per_1000(limits["value"], value_share)
+        tier_a = persons["tier"].eq("A")
+        by_state = persons.groupby("state").agg(records=("case_id", "size"), tier_a=("tier", lambda t: int(t.eq("A").sum())))
+        by_state = by_state.loc[by_state["records"].ge(1000)]
+        rates = by_state["tier_a"] / by_state["records"] * 1000
+        return {
+            "records_processed": int(len(persons)), "household_cases": int(cases["case_level"].eq("HOUSEHOLD").sum()),
+            "tier_counts": {str(k): int(v) for k, v in cases["tier"].value_counts().items()},
+            "lane_counts_check_now": {str(k): int(v) for k, v in cases.loc[cases["tier"].eq("A"), "lane"].value_counts().items()},
+            "coverage": {"value_check_assessable_share": value_share, "coding_check_assessable_share": coding_share,
+                         "any_non_rule_check_share": float((persons["value_p"].notna() | persons["coding_p"].notna()).mean()) if len(persons) else 0.0,
+                         "value_variables_assessed_distribution": {str(k): int(v) for k, v in persons["value_variables_assessed"].value_counts().sort_index().items()}},
+            "queue": queue_summary,
+            # Real-data burden check (plan §12.6): released files are post-scrutiny, so the observed rate of
+            # value checks at or below the threshold should be near the nominal rate if the tail probabilities
+            # are calibrated.  A large excess points at calibration, not at the data being full of errors.
+            "burden": {"value_threshold": limits["value"], "nominal_value_alerts_per_1000_if_all_clean": nominal_value_rate,
+                       "observed_value_alerts_per_1000": observed_value_rate,
+                       "observed_over_nominal": observed_value_rate / nominal_value_rate if nominal_value_rate else None,
+                       "check_now_per_1000_by_state": {str(k): float(v) for k, v in rates.items()},
+                       "check_now_state_rate_max_over_median": float(rates.max() / rates.median()) if len(rates) and rates.median() > 0 else None,
+                       "note": "States/UTs with at least 1,000 records; not validated against confirmed errors."},
+            "rule_findings": {"persons_with_hard_rule": int(persons["rule_error_count"].gt(0).sum()), "households_with_hard_rule": int((cases["case_level"].eq("HOUSEHOLD") & cases["rule_error_count"].gt(0)).sum())},
+            "group_alerts": {str(k): int(v) for k, v in groups["group_priority_band"].value_counts().items()} if len(groups) else {},
+            "impact_available": int(persons["impact_se"].notna().sum()),
+            "check_now_cases": int(tier_a.sum()),
+            "runtime_seconds": round(runtime, 3),
+        }
+
+    def _groups(self, cases: pd.DataFrame, summary: pd.DataFrame | None) -> pd.DataFrame:
+        persons = cases.loc[cases["case_level"].eq("PERSON")]
+        counts = persons.groupby(PATTERN_KEYS, dropna=False, sort=False).agg(
+            records=("case_id", "size"), check_now_cases=("tier", lambda t: int(t.eq("A").sum())),
+            check_if_time_cases=("tier", lambda t: int(t.eq("B").sum()))).reset_index()
+        if summary is None or summary.empty:
+            counts["group_priority_band"] = "NOT_ASSESSABLE"; counts["group_priority_score"] = np.nan; counts["pattern_min_q"] = np.nan
+            return counts
+        table = summary.copy()
+        for column in PATTERN_KEYS:
+            table[column] = _clean(table[column])
+        group = counts.merge(table, on=PATTERN_KEYS, how="left")
+        q = pd.to_numeric(group["fsu_q_value"], errors="coerce")
+        p = self.config.parameters
+        group["pattern_min_q"] = q   # kept name for the API: now the FSU-level (combined) q-value
         group["group_priority_score"] = -np.log10(q.clip(lower=1e-300))
-        group["group_priority_rank"] = percentile_midrank(group.group_priority_score)
-
-        def band(value: Any) -> str:
-            if pd.isna(value):
-                return "NOT_ASSESSABLE"
-            for name, threshold in self.config.parameters.group_bands:
-                if float(value) < threshold:
-                    return name
-            return "LOW"
-
-        group["group_priority_band"] = q.map(band)
+        group["group_priority_band"] = np.select([q.isna(), q.lt(p.group_strong_q), q.lt(p.group_alert_q)], ["NOT_ASSESSABLE", "HIGH", "MEDIUM"], "LOW")
+        group["notable_checks"] = group.get("notable_checks", 0)
+        group["pattern_checks"] = group.get("checks", 0)
         return group.sort_values(["group_priority_score", "fsu"], ascending=[False, True], na_position="last").reset_index(drop=True)
 
 
-def _distribution(series: pd.Series) -> dict[str, Any]:
-    numeric = pd.to_numeric(series, errors="coerce").dropna()
-    if numeric.empty:
-        return {"count": 0}
-    return {"count": int(len(numeric)), "min": float(numeric.min()), "p50": float(numeric.quantile(.5)), "p95": float(numeric.quantile(.95)), "max": float(numeric.max())}
+def calibration_by_mechanism(variables: pd.DataFrame, threshold: float) -> dict[str, Any]:
+    """Observed share at or below the threshold divided by the threshold, per evidence mechanism (1.0 = calibrated).
+
+    On released (post-scrutiny) data a value well below 1 means the mechanism is conservative (for example a
+    small reference whose smallest attainable tail probability is above the threshold); well above 1 means it
+    flags more often than its nominal rate.  Diagnostic only; not a validation.
+    """
+    result: dict[str, Any] = {"threshold": float(threshold)}
+    for column in ("p_current", "p_history", "p_model", "p_reference", "p_variable"):
+        values = pd.to_numeric(variables.get(column), errors="coerce").dropna() if column in variables else pd.Series(dtype=float)
+        result[column] = {"rows": int(len(values)), "observed_over_nominal": float((values <= threshold).mean() / threshold) if len(values) else None}
+    if "reference_testable" in variables:
+        has_reference = variables["p_reference"].notna()
+        result["reference_can_attain_threshold_share"] = float(variables.loc[has_reference, "reference_testable"].mean()) if has_reference.any() else None
+    return result
 
 
 def _markdown_report(metadata: dict[str, Any], summary: dict[str, Any]) -> str:
-    availability = "\n".join(f"| {name.title()} | {count:,} |" for name, count in summary["source_availability"].items())
-    return f"""# MoSPI Fusion V2 report
+    tiers = "\n".join(f"| {k} | {v:,} |" for k, v in summary["tier_counts"].items())
+    burden = summary["burden"]
+    return f"""# MoSPI fusion report ({metadata['fusion_version']})
 
-- Fusion run: `{metadata['run_id']}`
-- Release / observation: `{metadata['release']}` / `{metadata['observation']}`
+- Fusion run: `{metadata['run_id']}`; release / observation: `{metadata['release']}` / `{metadata['observation']}`
 - Preparation run: `{metadata['input_preprocessing_run_id']}`
+- Review budget: {metadata['queue'].get('review_budget_share')} of records = {metadata['queue'].get('budget_cases'):,} cases (default until HSD supplies capacity)
 
-## Coverage
+## Queue
 
-| Measure | Count |
+| Tier | Cases |
 |---|---:|
-| Records processed | {summary['records_processed']:,} |
-| Assessable risk | {summary['assessable_records']:,} |
-| Assessable influence | {summary['influence_availability']:,} |
-| Assessable priority | {summary['priority_rows']:,} |
-| Records breaking a documented rule | {summary['rule_violation_records']:,} |
+{tiers}
 
-## Available evidence by source
+## Real-data burden check (not a validation)
 
-| Source | Assessable records |
-|---|---:|
-{availability}
+- Value-check threshold: {burden['value_threshold']}
+- Nominal alerts per 1,000 records if every record were clean and the tail probabilities calibrated: {burden['nominal_value_alerts_per_1000_if_all_clean']:.2f}
+- Observed on this (released, post-scrutiny) batch: {burden['observed_value_alerts_per_1000']:.2f}
+- Max / median State "Check now" rate: {burden['check_now_state_rate_max_over_median']}
+- Discrete-test (Tarone) correction: {metadata['queue'].get('discrete_test_correction')}
 
 ## Interpretation boundary
 
-Risk is a calibrated combined record-level evidence-strength score, not a probability that a record is wrong. FSU (pattern) evidence is group context and is not part of record risk. Influence is a PROVISIONAL selective-editing local score: the largest per-variable share of a weighted State x sector x period total that would change if the value were replaced by its peer median; it is not the impact on an official PLFS estimate. Priority is `risk x influence` and supports review ordering only. Weights, override and bands are provisional engineering settings. No source response is changed.
+Evidence is a tail probability ("this is rare for comparable people"), never a probability that an answer is wrong. Rule findings
+are definite inconsistencies in the recorded answers. Impact orders cases within a tier and never changes which tier a case is in.
+FSU alerts describe a group and never move a record. Isolation Forest and LOF are research outputs and are not read. Thresholds,
+budget and lane shares are provisional engineering settings; the evaluation stage (docs/10_10_IMPROVEMENT_PLAN.md §12) has not been run.
 """

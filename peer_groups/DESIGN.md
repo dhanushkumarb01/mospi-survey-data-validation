@@ -1,5 +1,11 @@
 # PLFS V1 peer-group design
 
+## Current specification: `plfs-peer-groups-v1.1` (October 2026)
+
+* Pre-2025 releases span four quarters: every configured level is tried **within the record's quarter first**, then pooled over the release (`(L0+q, L0, L1+q, L1, ...)`; plan M2).
+* New target `day7_casual_wage`, compared within the same day-7 activity status (41/42/51) and 2-digit industry of that day's work.
+* One shared context definition (`derive_context`) is used by the peer, statistical and contextual engines. v1.0 runs remain readable.
+
 ## Scope and evidence base
 
 This is a reference-population mechanism, not a statistical-validation

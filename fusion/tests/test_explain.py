@@ -158,13 +158,15 @@ def test_supervisor_api_flow(project):
     assert client.get("/api/queue/position", params={"position": 2}).json()["case_id"] == "case_b"
     detail = client.get("/api/cases/case_a").json()
     assert detail["story"]["importance"]["position"] == 1 and detail["review_status"] == "UNREVIEWED"
-    saved = client.post("/api/cases/case_a/events", json={"event_type": "DECISION_MADE", "decision": "CONFIRMED_VALID", "actor": "A. Reviewer", "comment": "Checked schedule"})
+    saved = client.post("/api/cases/case_a/events", json={"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "reason_code": "GENUINE_HIGH_OR_LOW_VALUE",
+                                                          "verification_source": "SCHEDULE_IMAGE", "actor": "A. Reviewer", "comment": "Checked schedule"})
     assert saved.status_code == 200
     assert client.get("/api/cases", params={"review_status": "UNREVIEWED"}).json()["total"] == 1
     assert client.get("/api/queue/position", params={"position": 1, "review_status": "UNREVIEWED"}).json()["case_id"] == "case_b"
     reviews = client.get("/api/reviews").json()["rows"]
-    assert reviews[0]["decision_label"] == "Confirmed valid" and reviews[0]["actor"] == "A. Reviewer"
-    assert client.get("/api/overview").json()["review"]["decisions"]["CONFIRMED_VALID"] == 1
+    assert reviews[0]["decision_label"] == "Valid but unusual" and reviews[0]["actor"] == "A. Reviewer" and reviews[0]["actor_verified"] is False
+    assert client.get("/api/overview").json()["review"]["decisions"]["VALID_BUT_UNUSUAL"] == 1
+    assert client.get("/api/audit/verify").json()["status"] == "INTACT"
     groups = client.get("/api/groups").json()
     assert groups["rows"][0]["fsu"] == "11111" and groups["rows"][0]["patterns"]
     assert client.get("/api/groups/11111").json()["patterns"][0]["component"] == "digit_heaping"
@@ -208,10 +210,15 @@ def test_authentication_roles_and_audit_identity(project, tmp_path):
     assert client.get("/api/overview").status_code == 401
     assert client.get("/api/session/required").json() == {"authentication": True}
     sup = {"Authorization": "Bearer sup-token"}
-    saved = client.post("/api/cases/case_a/events", headers=sup, json={"event_type": "DECISION_MADE", "decision": "CONFIRMED_VALID", "actor": "someone else"})
-    assert saved.status_code == 200 and saved.json()["actor"] == "S. Supervisor"      # typed names cannot impersonate
-    tech = client.post("/api/cases/case_a/events", headers={"Authorization": "Bearer tech-token"}, json={"event_type": "DECISION_MADE", "decision": "CONFIRMED_VALID"})
+    decision = {"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "reason_code": "OTHER", "verification_source": "PHONE_CALL"}
+    saved = client.post("/api/cases/case_a/events", headers=sup, json={**decision, "actor": "someone else"})
+    assert saved.status_code == 200 and saved.json()["actor"] == "S. Supervisor" and saved.json()["actor_authenticated"] == 1   # typed names cannot impersonate
+    tech = client.post("/api/cases/case_a/events", headers={"Authorization": "Bearer tech-token"}, json=decision)
     assert tech.status_code == 403
+    assert client.get("/api/export/queue", headers={"Authorization": "Bearer tech-token"}).status_code == 403     # export is role-gated
+    assert client.get("/api/export/queue", headers=sup).status_code == 200
+    assert any(e["event_type"] == "EXPORT" for e in __import__("fusion.review", fromlist=["all_events"]).all_events(
+        next((project / "fusion" / "runs").glob("*")) / "review_audit.sqlite"))
     assert client.get("/api/overview", headers=sup).headers["x-frame-options"] == "DENY"
 
 

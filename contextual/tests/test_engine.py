@@ -30,6 +30,9 @@ def _row(index: int, occupation: object = "611", **updates: object) -> dict[str,
         "CWS_Earnings_Salaried": "100",
         "CWS_Earnings_SelfEmployed": "0",
         "Day7_Total_Hours": "8",
+        "MoSPI_quarter": "Q3",
+        "Day7_Act1_Status_Code": "11", "Day7_Act1_Industry_Code": "01", "Day7_Act1_Wage": "0",
+        "das17": "11", "ind17": "01", "ern17": "0",
     }
     row.update(updates)
     return row
@@ -120,6 +123,7 @@ def test_month_and_visit_boundaries_are_preserved_and_execution_is_deterministic
                     "MoSPI_visit": visit, "MoSPI_month": month, "MoSPI_prepared_status": "ready_for_downstream_preparation_only",
                     "MoSPI_state": "01", "MoSPI_sector": "1", "srl": "1", "acws": "11", "gedu_lvl": "07",
                     "ocu_pas": "611", "ind_pas": "01124", "ern_reg": "100", "ern_self": "0", "hr7": "8",
+                    "das17": "11", "ind17": "01", "ern17": "0",
                 })
     prepared = _write_prepared(tmp_path, rows, release="2025", design_period="post_2025")
     peer = _peer(tmp_path, prepared)
@@ -137,3 +141,32 @@ def test_output_uses_response_frequency_language_not_error_probability(tmp_path:
     assert "probability of error" not in text
     assert "chance of error" not in text
     assert "conditional frequency" in text
+
+
+def test_coding_tail_probability_depends_on_frequency_not_group_size() -> None:
+    """Plan W2.5 size-invariance: the same code rarity in a small and a large group gives about the same tail probability."""
+    from contextual.engine import smoothed_tail_probabilities
+    def group(group_id: str, scale: int) -> pd.DataFrame:
+        codes = ["611"] * (90 * scale) + ["612"] * (9 * scale) + ["999"] * (1 * scale)
+        return pd.DataFrame({"peer_group_id": group_id, "observed_value": codes, "cws_status": "11"})
+    valid = pd.concat([group("small", 1), group("large", 50)], ignore_index=True)
+    prior = valid.groupby(["cws_status", "observed_value"]).size().rename("n").reset_index()
+    prior["prior_probability"] = prior["n"] / prior["n"].sum()
+    tail = smoothed_tail_probabilities(valid, prior).set_index(["peer_group_id", "observed_value"])["coding_tail_p"]
+    assert tail[("small", "612")] == pytest.approx(tail[("large", "612")], abs=0.02)     # a 9% code
+    assert tail[("large", "611")] > 0.9                                                    # the common code carries no evidence
+    assert tail[("large", "999")] < tail[("large", "612")]                                 # rarer codes are more surprising
+    assert tail[("large", "999")] == pytest.approx(0.01, abs=0.005)                         # about its own frequency
+
+
+def test_a_code_seen_once_is_not_surprising_where_many_codes_are_seen_once():
+    """Good-Turing: in a group full of singletons, a new code is expected; in a homogeneous group it is not."""
+    from contextual.engine import smoothed_tail_probabilities
+    diverse = pd.DataFrame({"peer_group_id": "d", "observed_value": [f"{100 + i}" for i in range(200)] + ["999"] * 200, "cws_status": "11"})
+    uniform = pd.DataFrame({"peer_group_id": "u", "observed_value": ["999"] * 399 + ["100"], "cws_status": "11"})
+    valid = pd.concat([diverse, uniform], ignore_index=True)
+    prior = valid.groupby(["cws_status", "observed_value"]).size().rename("n").reset_index()
+    prior["prior_probability"] = prior["n"] / prior["n"].sum()
+    tail = smoothed_tail_probabilities(valid, prior).set_index(["peer_group_id", "observed_value"])["coding_tail_p"]
+    assert tail[("d", "100")] > 0.2          # one of 200 singletons: ordinary in this group
+    assert tail[("u", "100")] < 0.01         # the only odd code among 400 identical ones

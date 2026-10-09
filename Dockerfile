@@ -5,6 +5,10 @@
 
 FROM python:3.11.9-slim-bookworm AS runtime
 
+# Git commit of the source the image was built from (plan W0.5); reported by /healthz.
+ARG MOSPI_CODE_VERSION=unknown
+LABEL org.opencontainers.image.revision=$MOSPI_CODE_VERSION
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -43,7 +47,7 @@ ENV HOME=/tmp \
     MOSPI_HOST=0.0.0.0 \
     MOSPI_PORT=8000 \
     MOSPI_FUSION_ROOT=/data/fusion/runs \
-    MOSPI_PROJECT_ROOT=/data
+    MOSPI_PROJECT_ROOT=/data     MOSPI_CODE_VERSION=$MOSPI_CODE_VERSION
 
 EXPOSE 8000
 

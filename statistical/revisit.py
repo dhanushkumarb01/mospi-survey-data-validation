@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from peer_groups.config import SOURCE_PROFILES
-from survey_rules import APPLICABLE, applicability_series
+from survey_rules import APPLICABLE, applicability_series, status_concept
+from survey_rules.schema import read_parquet
 
 from .config import APPROVED_TARGETS, REVISIT_LINK_COLUMNS, StatisticalParameters
 from .statistics import add_distribution_evidence, finite_numeric
@@ -33,17 +34,18 @@ def _link_id(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
 def _prepared_values(path, observation: str) -> pd.DataFrame:
     source = SOURCE_PROFILES[("2023_24", observation)]
     link_columns = list(REVISIT_LINK_COLUMNS[observation])
-    required = {"MoSPI_record_key", "MoSPI_source_row", *link_columns, source.person_serial_column, source.context_columns["cws_status"], *source.target_columns.values()}
-    frame = pd.read_parquet(path, columns=sorted(required))
+    required = {"MoSPI_record_key", "MoSPI_source_row", *link_columns, source.person_serial_column, *source.context_columns.values(), *source.target_columns.values()}
+    frame = read_parquet(path, columns=sorted(required))
     result = pd.DataFrame({"source_observation_id": _source_id(frame, source.person_serial_column)})
     result["linkage_identifier"] = _link_id(frame, link_columns)
     if result["source_observation_id"].duplicated().any():
         raise ValueError("Prepared revisit linkage source IDs are not unique")
-    status = frame[source.context_columns["cws_status"]]
     for target in APPROVED_TARGETS:
         column = source.target_columns.get(target)
+        status_column = source.context_columns.get(status_concept(target))
         result[target] = finite_numeric(frame[column]) if column else np.nan
-        result[f"{target}__applicable"] = applicability_series(target, status).eq(APPLICABLE).to_numpy()
+        result[f"{target}__applicable"] = (applicability_series(target, frame[status_column]).eq(APPLICABLE).to_numpy()
+                                           if column and status_column and status_column in frame else False)
     return result
 
 
@@ -64,7 +66,7 @@ def build_revisit_evidence(
         "backoff_level", "assessability_status", "not_assessable_reason", "release", "observation",
         "design_period", "month", "reference_run_id", "specification_version",
     ]
-    assignments = pd.read_parquet(revisit_assignment_path, columns=columns)
+    assignments = read_parquet(revisit_assignment_path, columns=columns)
     assignments = assignments.rename(columns={"assessability_status": "revisit_peer_assessability_status", "not_assessable_reason": "revisit_peer_not_assessable_reason"})
     revisits = _prepared_values(revisit_prepared_path, "revisit")
     firsts = _prepared_values(first_prepared_path, "first_visit").rename(columns={"source_observation_id": "first_source_observation_id"})

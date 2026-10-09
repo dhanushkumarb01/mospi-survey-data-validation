@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from peer_groups.engine import PeerGroupEngine, RunConfig as PeerRunConfig
 from statistical.config import StatisticalParameters
@@ -24,7 +25,8 @@ def _first_2024(index: int, value: object = "0", status: str = "31") -> dict[str
         "MoSPI_design_period": "pre_2025", "MoSPI_visit": "V1", "MoSPI_prepared_status": "ready_for_downstream_preparation_only",
         "MoSPI_state": "01", "MoSPI_sector": "1", "Person_Serial_No": "1", "CWS_Status_Code": status, "General_Education_Level": "07",
         "Principal_Occupation_Code": "611", "Principal_Industry_Code": "01124", "CWS_Earnings_Salaried": value,
-        "CWS_Earnings_SelfEmployed": value, "Day7_Total_Hours": value,
+        "CWS_Earnings_SelfEmployed": value, "Day7_Total_Hours": value, "MoSPI_quarter": "Q3",
+        "Day7_Act1_Status_Code": status, "Day7_Act1_Industry_Code": "01", "Day7_Act1_Wage": "0",
     }
 
 
@@ -75,7 +77,8 @@ def test_zero_mad_missing_values_and_peer_non_assessability_are_explicit(tmp_pat
 def _first_2023(index: int, value: int) -> dict[str, object]:
     return {
         "MoSPI_source_row": index + 2, "MoSPI_record_key": f"Q1|V1|2|01|01|100{index}|1|1|01", "MoSPI_release": "2023_24", "MoSPI_observation": "first_visit", "MoSPI_design_period": "pre_2025", "MoSPI_visit": "V1", "MoSPI_prepared_status": "ready_for_downstream_preparation_only", "MoSPI_state": "01", "MoSPI_sector": "2",
-        "b4q1_perv1": "01", "b6q5_perv1": "31", "b4q8_perv1": "07", "b5pt1q6_perv1": "611", "b5pt1q5_perv1": "01124", "b6q9_perv1": str(value), "b6q10_perv1": str(-value), "b6q7_3pt1_perv1": "8",
+        "b4q1_perv1": "01", "b6q5_perv1": "31", "b4q8_perv1": "07", "b5pt1q6_perv1": "611", "b5pt1q5_perv1": "01124", "b6q9_perv1": str(value), "b6q10_perv1": str(-value), "b6q7_3pt1_perv1": "8", "MoSPI_quarter": "Q1",
+        "b6q4_3pt1_perv1": "31", "b6q5_3pt1_perv1": "01", "b6q9_3pt1_perv1": "0",
         "distcode_perv1": "01", "b1q1_perv1": f"100{index}", "b1q13_perv1": "1", "b1q14_perv1": "1", "b1q15_perv1": "01",
     }
 
@@ -83,7 +86,7 @@ def _first_2023(index: int, value: int) -> dict[str, object]:
 def _revisit_2023(index: int, value: int) -> dict[str, object]:
     return {
         "MoSPI_source_row": index + 2, "MoSPI_record_key": f"Q2|V2|2|01|01|100{index}|1|1|01", "MoSPI_release": "2023_24", "MoSPI_observation": "revisit", "MoSPI_design_period": "pre_2025", "MoSPI_visit": "V2", "MoSPI_prepared_status": "ready_for_downstream_preparation_only", "MoSPI_state": "01", "MoSPI_sector": "2",
-        "b4q1_pervv": "01", "b6q5_perrv": "31", "b6q9_perrv": str(value), "b6q10_perrv": str(-value),
+        "b4q1_pervv": "01", "b6q5_perrv": "31", "b6q9_perrv": str(value), "b6q10_perrv": str(-value), "MoSPI_quarter": "Q1",
         "dist_code_perrv": "01", "b1q1_perrv": f"100{index}", "b1q13_perrv": "1", "b1q14_perrv": "1", "b1q15_perrv": "01",
     }
 
@@ -141,3 +144,16 @@ def test_non_applicable_placeholder_zeros_are_never_assessed(tmp_path: Path) -> 
     hours = evidence[evidence.target_variable.eq("day7_total_hours")]
     assert hours[hours.source_observation_id.str.match(r"h-1d")].statistical_assessability_status.eq("NOT_ASSESSABLE").all()
     assert hours[hours.source_observation_id.str.match(r"h-2d")].statistical_assessability_status.eq("ASSESSABLE").all()
+
+
+def test_leave_one_out_placement_and_finite_sample_tail_probabilities() -> None:
+    """Plan S1/S2: the record is compared with the others only; small groups cannot give overwhelming evidence."""
+    from statistical.statistics import add_distribution_evidence
+    frame = pd.DataFrame({"g": ["a"] * 5, "v": [1.0, 2.0, 3.0, 4.0, 100.0]})
+    out = add_distribution_evidence(frame, value_column="v", group_column="g", lower_quantile=.05, upper_quantile=.95)
+    top = out.loc[out.v.eq(100.0)].iloc[0]
+    assert top.loo_reference_size == 4 and top.loo_percentile_position == 1.0     # above all 4 others
+    assert top.upper_tail_p == pytest.approx(1 / 5)                                # (0 others >= x + 1)/(4 + 1)
+    assert top.two_sided_tail_p == pytest.approx(2 / 5) and top.tail_direction == "HIGH"
+    middle = out.loc[out.v.eq(3.0)].iloc[0]
+    assert middle.two_sided_tail_p == pytest.approx(1.0)

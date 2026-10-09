@@ -13,6 +13,10 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from peer_groups.config import COMPATIBLE_SPECIFICATION_VERSIONS
+from survey_rules import period_index
+from survey_rules.schema import read_parquet
+
 from .conditional_models import run_conditional_models
 from .config import LOF_REFERENCE_TARGET, ML_METHOD_VERSION, Parameters, READY_STATUS, SOURCE_FIELDS
 from .isolation_forest import run_isolation_forest
@@ -32,6 +36,9 @@ class RunConfig:
     output_root: Path
     run_id: str | None = None
     parameters: Parameters = Parameters()
+    # Earlier prepared releases of the same design period: the conditional
+    # models are trained on strictly earlier periods (plan W3.5).
+    history: tuple[Path, ...] = ()
 
 
 def _clean(series: pd.Series) -> pd.Series:
@@ -40,7 +47,8 @@ def _clean(series: pd.Series) -> pd.Series:
 
 class MLEngine:
     def __init__(self, config: RunConfig) -> None:
-        self.config = replace(config, prepared_person_path=Path(config.prepared_person_path), peer_group_run_path=Path(config.peer_group_run_path), output_root=Path(config.output_root))
+        self.config = replace(config, prepared_person_path=Path(config.prepared_person_path), peer_group_run_path=Path(config.peer_group_run_path),
+                              output_root=Path(config.output_root), history=tuple(Path(p) for p in config.history))
 
     @staticmethod
     def _metadata(path: Path) -> dict[str, object]:
@@ -68,20 +76,22 @@ class MLEngine:
             raise MLFailure("No approved ML source-field mapping for prepared provenance")
         return prepared, peer
 
-    def _base(self, prepared: dict[str, object]) -> pd.DataFrame:
+    def _base(self, prepared: dict[str, object], path: Path | None = None) -> pd.DataFrame:
+        path = path or self.config.prepared_person_path
         source = SOURCE_FIELDS[(str(prepared["release"]), str(prepared["observation"]))]
         required = {
             "MoSPI_record_key", "MoSPI_source_row", "MoSPI_release", "MoSPI_observation", "MoSPI_design_period", "MoSPI_visit",
             "MoSPI_state", "MoSPI_sector", "MoSPI_fsu", "MoSPI_prepared_status", source.serial, source.age, source.sex,
             source.education, source.cws_status, source.earnings_salaried, source.earnings_self_employed,
         }
-        for optional in (source.occupation, source.industry, source.day7_hours):
+        for optional in (source.occupation, source.industry, source.day7_hours, source.day7_activity1_status, source.day7_activity1_industry, source.casual_wage):
             if optional:
                 required.add(optional)
+        required.add("MoSPI_quarter")
         if str(prepared["release"]) == "2025":
             required.add("MoSPI_month")
         try:
-            frame = pd.read_parquet(self.config.prepared_person_path, columns=sorted(required))
+            frame = read_parquet(path, columns=sorted(required))
         except Exception as error:
             raise MLFailure(f"Could not read required prepared ML columns: {error}") from error
         missing = required - set(frame.columns)
@@ -103,13 +113,44 @@ class MLEngine:
         result["day7_hours"] = _clean(frame[source.day7_hours]) if source.day7_hours else pd.NA
         result["occupation_major_group"] = result["occupation"].where(result["occupation"].str.fullmatch(r"\d{3}"), "").str.slice(0, 1)
         result["industry_division"] = result["industry"].where(result["industry"].str.fullmatch(r"\d{4,5}"), "").str.slice(0, 2)
+        result["day7_activity1_status"] = _clean(frame[source.day7_activity1_status]) if source.day7_activity1_status else ""
+        day_industry = _clean(frame[source.day7_activity1_industry]) if source.day7_activity1_industry else pd.Series("", index=frame.index, dtype="string")
+        valid_day_industry = day_industry.str.fullmatch(r"\d{1,2}")
+        result["day7_activity1_industry"] = day_industry.where(valid_day_industry, "").str.zfill(2).where(valid_day_industry, "")
+        result["casual_wage"] = _clean(frame[source.casual_wage]) if source.casual_wage else pd.NA
+        quarter = _clean(frame["MoSPI_quarter"])
+        month = _clean(frame["MoSPI_month"]) if "MoSPI_month" in frame else pd.Series("", index=frame.index, dtype="string")
+        result["period_index"] = pd.array([period_index(str(prepared["release"]), q, m) for q, m in zip(quarter, month)], dtype="Int64")
         # Keep the large real-data working table bounded: these are low or
         # moderate-cardinality coded fields, not free text. Source/record IDs
         # intentionally stay as strings for traceability and stable hashing.
         for column in result.columns:
-            if column not in {"source_observation_id", "record_id", "preprocessing_run_id", "prepared_ready"}:
+            if column not in {"source_observation_id", "record_id", "preprocessing_run_id", "prepared_ready", "period_index"}:
                 result[column] = result[column].astype("category")
         return result
+
+    def _history(self, prepared: dict[str, object], base: pd.DataFrame) -> pd.DataFrame:
+        """Earlier periods of the same design period, one copy of each period (as in the historical layer)."""
+        frames, self._history_runs = [], []
+        for path in self.config.history:
+            meta = self._metadata(path.parent / "run_metadata.json")
+            if str(meta.get("design_period")) != str(prepared["design_period"]) or str(meta.get("observation")) != str(prepared["observation"]):
+                raise MLFailure(f"History {path} is not the same design period and observation route; models never cross the January-2025 redesign.")
+            if (str(meta.get("release")), str(meta.get("observation"))) not in SOURCE_FIELDS:
+                raise MLFailure(f"No ML source-field mapping for history {path}")
+            frames.append(self._base(meta, path))
+            self._history_runs.append({"release": meta.get("release"), "run_id": meta.get("run_id")})
+        taken: set[int] = set()
+        parts = []
+        for frame in [*frames, base]:   # earlier releases first; the target supplies only periods they lack
+            periods = set(pd.to_numeric(frame["period_index"], errors="coerce").dropna().astype(int)) - taken
+            parts.append(frame[pd.to_numeric(frame["period_index"], errors="coerce").isin(periods)])
+            taken |= periods
+        pool = pd.concat(parts, ignore_index=True)
+        for column in pool.columns:
+            if isinstance(pool[column].dtype, pd.CategoricalDtype):
+                pool[column] = pool[column].astype("string")
+        return pool
 
     def _lof_assignments(self, prepared: dict[str, object], peer: dict[str, object]) -> pd.DataFrame:
         columns = ["source_observation_id", "peer_group_id", "peer_group_size", "assessability_status", "not_assessable_reason", "reference_run_id", "specification_version", "release", "observation", "design_period", "visit", "month"]
@@ -121,7 +162,7 @@ class MLEngine:
                 raise MLFailure(f"Peer assignments have mixed or mismatched {column}")
         if not assigned["reference_run_id"].astype(str).eq(str(prepared["run_id"])).all():
             raise MLFailure("LOF peer assignment provenance does not match preprocessing run")
-        if str(peer.get("specification_version", "")) != "plfs-peer-groups-v1.0":
+        if str(peer.get("specification_version", "")) not in COMPATIBLE_SPECIFICATION_VERSIONS:
             raise MLFailure("Unexpected peer-group specification version")
         return assigned
 
@@ -161,7 +202,8 @@ class MLEngine:
                 arrow = self._parquet_table(table)
                 if writer is None:
                     writer = pq.ParquetWriter(destination / filename, arrow.schema, compression="snappy")
-                writer.write_table(arrow)
+                # Boundary batches can infer different types for the same column (e.g. a month with only whole values).
+                writer.write_table(arrow.select(writer.schema.names).cast(writer.schema))
                 del arrow, table, subset
                 gc.collect()
         finally:
@@ -173,17 +215,27 @@ class MLEngine:
         started = time.perf_counter()
         prepared, peer = self._validate()
         base = self._base(prepared)
+        history = self._history(prepared, base)
         assignments = self._lof_assignments(prepared, peer)
         run_id = self.config.run_id or str(uuid.uuid4())
         destination = self.config.output_root / f"{prepared['release']}_{prepared['observation']}_{run_id}"
         destination.mkdir(parents=True, exist_ok=False)
         self._base_cache = base
+        registry: list[dict] = []
+
+        def conditional(subset: pd.DataFrame) -> pd.DataFrame:
+            table, entries = run_conditional_models(subset, self.config.parameters, history)
+            registry.extend(entries)
+            return table
+
         builders = {
-            "isolation_forest_evidence.parquet": (lambda subset: run_isolation_forest(subset, self.config.parameters), True),
-            "lof_evidence.parquet": (lambda subset: run_peer_lof(subset, assignments, self.config.parameters), False),
-            "conditional_model_evidence.parquet": (lambda subset: run_conditional_models(subset, self.config.parameters), True),
-            "similarity_evidence.parquet": (lambda subset: run_similarity(subset, self.config.parameters), False),
+            "conditional_model_evidence.parquet": (conditional, True),
+            "similarity_evidence.parquet": (lambda subset: run_similarity(subset, self.config.parameters).assign(decision_path="INFORMATION_ONLY"), False),
         }
+        if self.config.parameters.run_research_models:
+            # Research comparison only: never read by fusion (plan W2.4).
+            builders["isolation_forest_evidence.parquet"] = (lambda subset: run_isolation_forest(subset, self.config.parameters).assign(decision_path="RESEARCH_ONLY"), True)
+            builders["lof_evidence.parquet"] = (lambda subset: run_peer_lof(subset, assignments, self.config.parameters).assign(decision_path="RESEARCH_ONLY"), False)
         summaries: dict[str, dict[str, int]] = {}
         component_names = {
             "isolation_forest_evidence.parquet": "isolation_forest", "lof_evidence.parquet": "peer_scoped_lof",
@@ -195,8 +247,17 @@ class MLEngine:
         for name, (builder, separated) in builders.items():
             summaries[component_names[name]] = self._write_component(destination, name, builder, separated=separated)
             gc.collect()
-        report = {"records_processed": int(len(base)), "runtime_seconds": round(time.perf_counter() - started, 3), "components": summaries, "warnings": ["High-similarity (non-exact) matching is NOT IMPLEMENTED in V1; only blocked exact response signatures are emitted.", "Conditional model is first-visit salaried-earnings evidence only; revisit is explicitly not assessable for that component."]}
-        metadata = {"run_id": run_id, "processing_timestamp_utc": utc_now(), "software_version": "0.1.0", "ml_method_version": ML_METHOD_VERSION, "input_preprocessing_run_id": prepared["run_id"], "input_prepared_person_path": str(self.config.prepared_person_path), "peer_group_run_id": peer["run_id"], "peer_group_run_path": str(self.config.peer_group_run_path), "peer_group_specification_version": peer["specification_version"], "release": prepared["release"], "observation": prepared["observation"], "design_period": prepared["design_period"], "parameters": self.config.parameters.__dict__, "outputs": list(builders) + ["ml_report.json", "ml_report.md", "run_metadata.json"]}
+        write_json(destination / "model_registry.json", {"models": registry})
+        report = {"records_processed": int(len(base)), "runtime_seconds": round(time.perf_counter() - started, 3), "components": summaries,
+                  "conditional_models": {"fitted": len(registry), "trained_on_earlier_periods": sum(1 for r in registry if r["training_scheme"] == "TRAINED_ON_EARLIER_PERIODS"),
+                                         "in_round_cross_fit_fallback": sum(1 for r in registry if r["training_scheme"] != "TRAINED_ON_EARLIER_PERIODS")},
+                  "decision_path": {"conditional_models": "VALUE_CHECK", "similarity": "INFORMATION_ONLY",
+                                    "isolation_forest": "RESEARCH_ONLY" if self.config.parameters.run_research_models else "NOT_RUN",
+                                    "peer_scoped_lof": "RESEARCH_ONLY" if self.config.parameters.run_research_models else "NOT_RUN"},
+                  "warnings": ["Exact-signature similarity is informational; near-duplicate households are an FSU-level pattern check.",
+                               "Isolation Forest and LOF are research outputs only and never affect the supervisor queue.",
+                               "Conditional models apply to first-visit records; revisit records are explicitly not assessable for them."]}
+        metadata = {"run_id": run_id, "processing_timestamp_utc": utc_now(), "software_version": "0.1.0", "ml_method_version": ML_METHOD_VERSION, "input_preprocessing_run_id": prepared["run_id"], "input_prepared_person_path": str(self.config.prepared_person_path), "peer_group_run_id": peer["run_id"], "peer_group_run_path": str(self.config.peer_group_run_path), "peer_group_specification_version": peer["specification_version"], "release": prepared["release"], "observation": prepared["observation"], "design_period": prepared["design_period"], "parameters": self.config.parameters.__dict__, "history_preprocessing_runs": self._history_runs, "model_registry": "model_registry.json", "outputs": list(builders) + ["model_registry.json", "ml_report.json", "ml_report.md", "run_metadata.json"]}
         write_json(destination / "ml_report.json", report)
         write_json(destination / "run_metadata.json", metadata)
         write_markdown(destination / "ml_report.md", metadata, report)

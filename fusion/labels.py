@@ -64,6 +64,7 @@ VARIABLES = {
     "cws_earnings_salaried": {"label": "Earnings from regular salaried/wage work", "short": "salaried earnings", "unit": "rupees"},
     "cws_earnings_self_employed": {"label": "Earnings from self-employment", "short": "self-employment earnings", "unit": "rupees"},
     "day7_total_hours": {"label": "Total hours worked on day 7 of the reference week", "short": "hours worked on day 7", "unit": "hours"},
+    "day7_casual_wage": {"label": "Daily wage for casual work on day 7 of the reference week", "short": "day-7 casual wage", "unit": "rupees"},
     "age": {"label": "Age", "short": "age", "unit": "years"},
     "cws_status": {"label": "Current weekly activity status", "short": "activity status", "unit": "code"},
     "principal_industry_division": {"label": "Industry division of principal activity", "short": "industry", "unit": "code"},
@@ -79,11 +80,19 @@ VARIABLES = {
 DIMENSIONS = {
     "state": "State/UT", "sector": "Sector", "cws_status": "Current weekly activity status",
     "occupation_major_group": "Occupation", "education": "General education level", "industry_division": "Industry division",
+    "day7_activity1_status": "Activity on day 7", "day7_activity1_industry": "Industry of day-7 work", "quarter": "Survey quarter",
 }
 
 PRIORITY_BANDS = {
-    "CRITICAL": "Highest priority", "HIGH": "High priority", "MEDIUM": "Medium priority",
-    "LOW": "Low priority", "NOT_ASSESSABLE": "Priority not calculated",
+    "CHECK_NOW": "Check now", "CHECK_IF_TIME": "Check if time", "NOT_FLAGGED": "Not flagged", "NOT_ASSESSABLE": "No check possible",
+    # Superseded V2.0 runs (risk x influence bands), shown only when such a run is selected.
+    "CRITICAL": "Highest priority (superseded method)", "HIGH": "High priority (superseded method)", "MEDIUM": "Medium priority (superseded method)",
+    "LOW": "Low priority (superseded method)",
+}
+
+LANES = {
+    "RULE": "Questionnaire rule not met", "RULE_SOFT": "Soft questionnaire check", "VALUE": "Unusual value",
+    "CODING": "Unusual occupation code",
 }
 
 # FSU group alerts are banded by the Benjamini-Hochberg q-value of the strongest FSU check.
@@ -93,8 +102,23 @@ GROUP_BANDS = {
 }
 
 DECISIONS = {
-    "CONFIRMED_ISSUE": "Issue confirmed", "CONFIRMED_VALID": "Confirmed valid",
-    "INCONCLUSIVE_NEEDS_FOLLOW_UP": "Inconclusive / needs follow-up", "UNREVIEWED": "Not yet reviewed",
+    "CONFIRMED_ERROR": "Confirmed error", "VALID_BUT_UNUSUAL": "Valid but unusual", "NEEDS_FIELD_VERIFICATION": "Needs field verification",
+    "CANNOT_VERIFY": "Cannot verify", "ESCALATE": "Escalated", "UNREVIEWED": "Not yet reviewed",
+}
+
+REASON_CODES = {
+    "EXTRA_OR_MISSING_ZERO": "Extra or missing zero", "MONTHLY_ANNUAL_CONFUSION": "Monthly / annual amount confused",
+    "DIGIT_TRANSPOSITION": "Digits swapped", "WRONG_CODE": "Wrong code recorded", "WRONG_UNIT_OR_PERIOD": "Wrong unit or reference period",
+    "WRONG_PERSON_OR_HOUSEHOLD": "Answer belongs to another person or household", "GENUINE_HIGH_OR_LOW_VALUE": "Genuinely high or low value",
+    "SEASONAL_OR_ONE_OFF": "Seasonal or one-off situation", "SPECIAL_CIRCUMSTANCE": "Special circumstance", "RARE_BUT_CORRECT_CODE": "Rare but correct code",
+    "CALL_BACK": "Call the household back", "REVISIT": "Revisit the household", "CHECK_SCHEDULE_IMAGE": "Check the schedule image",
+    "RESPONDENT_UNREACHABLE": "Respondent unreachable", "NO_SCHEDULE_IMAGE": "No schedule image available",
+    "POSSIBLE_FIELDWORK_ISSUE": "Possible fieldwork issue", "NEEDS_SUBJECT_EXPERT": "Needs a subject expert", "OTHER": "Other (explain in the note)",
+}
+
+VERIFICATION_SOURCES = {
+    "PHONE_CALL": "Phone call", "FIELD_REVISIT": "Field revisit", "SCHEDULE_IMAGE": "Schedule image",
+    "SUPERVISOR_KNOWLEDGE": "Supervisor's knowledge", "NOT_VERIFIED": "Not verified",
 }
 
 

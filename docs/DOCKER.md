@@ -29,6 +29,8 @@ From the repository root:
 
 ```bash
 docker compose build                              # build the image (about 3 minutes the first time)
+# To make /healthz report the exact source commit (detects a stale image):
+# MOSPI_CODE_VERSION=$(git rev-parse --short=12 HEAD) docker compose build
 docker compose --profile seed run --rm seed       # copy the stored runs into the data volume
 docker compose up -d                              # start the workspace
 ```

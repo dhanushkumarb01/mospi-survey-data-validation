@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-STATISTICAL_METHOD_VERSION = "plfs-statistical-v1.1"  # v1.1: questionnaire applicability gate
+# v1.1: questionnaire applicability gate.  v2.0: leave-one-out placement and
+# finite-sample (conformal) tail probabilities; day-7 casual wage target.
+STATISTICAL_METHOD_VERSION = "plfs-statistical-v2.0"
 APPROVED_TARGETS = (
     "cws_earnings_salaried",
     "cws_earnings_self_employed",
     "day7_total_hours",
+    "day7_casual_wage",
 )
 
 

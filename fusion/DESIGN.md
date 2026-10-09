@@ -1,59 +1,46 @@
-# Fusion / evidence combination — V2 design (`MoSPI-fusion-v2.0`)
+# Fusion and the supervisor queue — design (`MoSPI-fusion-v2.1-lanes`)
 
-Status labels: **Validated** (checked against official documents or published magnitudes), **Evaluated** (measured on controlled injected errors), **Provisional** (engineering choice, not learned from confirmed PLFS errors), **Not assessable**, **Not implemented**.
+Status labels: **Validated** (checked against official documents or published magnitudes), **Evaluated** (measured on controlled injected errors), **Implemented, not evaluated**, **Provisional** (engineering default pending HSD input), **Not assessable**.
+
+## Why the V2.0 construction was replaced (in place)
+
+V2.0 ranked every source within the run, averaged the ranks with fixed weights, let the highest of three ML ranks override the average, and multiplied the result by a State × sector share-of-total influence. The audit in `docs/10_10_IMPROVEMENT_PLAN.md` §5.7 measured that this (a) diluted value errors that only one or two sources can see, (b) let Isolation Forest — near chance on its own — dominate through the max and the override, (c) let contextual surprisal, which grows with group size, add noise, and (d) over-reviewed the smallest UTs (CRITICAL share 20.4% in Lakshadweep against 1.15% in Uttar Pradesh). It was replaced, not retuned. `fusion/legacy.py` keeps it only as evaluation baseline A0; stored V2.0 runs stay readable and are labelled "superseded method" in the workspace.
 
 ## Boundary
 
-Fusion consumes, but never reruns, the evidence layers. A missing or non-assessable source is excluded from risk, never converted to low/zero evidence. It never declares a record wrong or estimates an error probability.
+Fusion consumes, never reruns, the evidence layers. It requires the statistical, contextual, ML (conditional models), historical and integrity runs; the pattern run is optional. Every run must agree on release, observation, design period and preparation run (strict provenance gate). Inputs from a stage that predates its current method version fail loudly with the missing column named. Nothing is an error probability.
 
-## Strict provenance gate
+## Lanes (plan §8.1)
 
-The prepared-person metadata and every supplied run (statistical, contextual, ML, and optionally pattern, historical, integrity) must agree on `release`, `observation`, `design_period` and the preparation `run_id`. Evidence IDs must map to the supplied prepared persons. No release pooling, no month or design-break crossing.
-
-## Two kinds of evidence, kept apart (V2)
-
-| Level | Sources | Used for |
+| Lane | Evidence | Where it goes |
 |---|---|---|
-| Record | statistical, contextual, ML, historical; documented integrity rules | record risk and priority |
-| Group (FSU) | pattern | FSU context on the case page; separate FSU queue |
+| Rules | Approved hard integrity rules, person and household level (`integrity/`) | Always "Check now"; never mixed into a score. Household findings are household cases. Soft (warning) rules go to "Check if time". |
+| Value | Per variable (salaried earnings, self-employment earnings, day-7 hours, day-7 casual wage): `p_cur` current peers (leave-one-out), `p_hist` earlier periods (out-of-sample), `p_model` expected-value model trained on earlier periods (split-conformal) | `p_ref = mean(p_cur, p_hist)`; `p_v = Šidák(min(p_ref, p_model), mechanisms)`; record `value_p = Šidák(min_v p_v, variables assessed)` (`fusion/lanes.py`) |
+| Coding | Conformal frequency tail probability of the occupation code within its comparison group (`contextual/`) | Own small share of the budget |
+| Group (FSU) | Cauchy combination of the FSU's checks, Benjamini–Hochberg across FSUs (`pattern/fsu_summary.parquet`) | Group alerts and case context only; never moves a case |
+| Research only | Isolation Forest, LOF | Not read by fusion |
 
-V1 inherited each FSU's strongest pattern rank into every member's risk, and the extreme-rank override then lifted 1,974 records (2024) to the top of the list on FSU evidence alone (audit H3). In V2 pattern evidence has **no weight in record risk and cannot trigger the override**. Membership of an unusual FSU is shown as context ("the FSU as a whole differs…, not evidence about this person") and only when an FSU check is notable after multiple-testing correction.
+All inputs are tail probabilities with a fixed meaning ("fewer than 1 in N comparable records look like this"), not within-run ranks, so a quiet batch gives a short list. Their finite-sample floors (about 1/n) mean a small comparison group cannot produce overwhelming evidence — by design. Averaging `p_cur` and `p_hist` is conservative when the two references agree; whether the combined values are calibrated on real data is reported by every run (burden check below) and is to be tested in the evaluation stage. **Implemented, not evaluated.**
 
-## Source scores and calibration (Provisional)
+## Queue (plan §8.3; `fusion/queue.py`)
 
-| Source | Stored input |
-|---|---|
-| Statistical | max over applicable assessable targets of `2·|percentile − 0.5|` (statistical layer's own assessability, which excludes questionnaire placeholders) |
-| Contextual | conditional-frequency surprisal of the occupation code |
-| ML | max of the stored method evidence ranks (Isolation Forest, LOF, conditional model; exact-signature evidence is informational) |
-| Historical | max over targets of `2·|past-period percentile − 0.5|` |
+* Review budget: 1% of the batch's records (**Provisional** default until HSD supplies supervisor capacity), 10% of it reserved for coding checks, at most 10 value checks per FSU in "Check now".
+* Threshold of a lane = its budget ÷ the records it can assess (plan §8.3, capacity ÷ records), so with calibrated evidence the expected number of alerts among clean records equals the budget. A case passing the threshold enters "Check now" strongest-first until the budget or FSU cap is reached; overflow and the next band of evidence (5 × threshold, up to 2 × budget) go to "Check if time".
+* Within a tier: rules first, then impact, then evidence. Impact never changes the tier.
+* `priority_band` ∈ CHECK_NOW, CHECK_IF_TIME, NOT_FLAGGED, NOT_ASSESSABLE; `queue_position` is the global order; `priority_score` is a monotone transform of it (kept for API ordering).
 
-Each is converted to a within-run empirical mid-rank. For statistical evidence an exact 0 (value equal to its comparison-group median) is "no evidence" and gets rank 0; in V1 a large tie block of such zeros received a rank of about 0.3 (audit M4).
+## Impact (plan W2.7; `fusion/impact.py`)
 
-`risk = weighted mean of available record-level ranks` with provisional weights statistical 0.30, contextual 0.20, ML 0.25, historical 0.25; `risk = max(risk, highest record-level rank)` when that rank ≥ 0.995 (provisional override). A record breaking an error-severity documented integrity rule is listed first (`priority_score = 1`): it is a definite inconsistency in the recorded answers, although the schedule still decides which answer is wrong.
+`impact_se = |w_i (y_i − m_i) / Σ_d w| / SE_d`: the change in the domain's weighted mean (release × period × State/UT × sector, applicable persons) if the value were replaced by its expected value, in design-based standard errors (Taylor linearisation, FSU as PSU within strata), with the SE floored at the national CV × domain mean. Small domains have large SEs, so the same relative error does not automatically score higher there. Final weights: `MULT/100`, or `/200` when NSS ≠ NSC (pre-2025 READMEs); `MULT/100` (2025) — **Validated**.
 
-## Influence — potential effect on a weighted total (Provisional)
+## Burden check on real data (plan §12.6)
 
-V1 used `design weight × max |observed − peer median|` across rupee and hour targets, which has no meaning across units (audit H2). V2 uses the selective-editing local score (Latouche & Berthelot 1992; Hedlin 2003), **per variable**:
-
-`local_score_t = w · |y_t − m_t| / Σ_{j∈d} w_j · |y_jt|`
-
-* `w`: documented final weight for a quarterly (pre-2025) or monthly (2025) estimate — `MULT/100`, or `MULT/200` when NSS ≠ NSC (pre-2025 READMEs); `MULT/100` (README2025). Validated against the READMEs; national indicators computed with it match published PLFS magnitudes.
-* `m`: the stored comparison-group median, used as the anticipated value.
-* `d`: release × quarter/month × State/UT × sector; the denominator includes only persons to whom the item applies.
-
-Each score is a share of a weighted domain total, so rupee and hour scores are comparable as shares. `raw_influence` = the largest share; `influence_score` its within-run rank. It is **not** the impact on an official LFPR/WPR/UR estimate: the anticipated value, domain and choice of "total" are not HSD-approved. Records with no applicable value, no stored anticipated value or no weight are `NOT_ASSESSABLE` (not zero), so they receive no priority.
-
-`priority = risk × influence`; bands CRITICAL ≥ 0.8, HIGH ≥ 0.5, MEDIUM ≥ 0.2, LOW ≥ 0 (Provisional; with two roughly independent ranks the top band holds about 2% by construction). Bands order work; they are not levels of error likelihood. There is no validated review cut-off.
-
-## FSU group queue
-
-`group_priorities.parquet`: per FSU, the minimum Benjamini–Hochberg q-value over its pattern checks, the number of notable checks, and `group_priority_score = −log10(min q)`; bands HIGH (q < 0.01, "clear group difference"), MEDIUM (q < 0.05), LOW. Group alerts never name an enumerator (no enumerator ID exists).
-
-## Evaluation (Evaluated)
-
-`evaluation/` injects controlled errors into a State subset and recomputes E0–E7 from the stored source scores; results are in `evaluation/results/` and on the Technical reference page. See `evaluation/README.md`.
+Every fusion report states the nominal number of value alerts per 1,000 records if all records were clean and the evidence calibrated (threshold × 1,000 × assessable share), the observed number on the batch, and the highest/median State "Check now" rate. Released files are post-scrutiny, so a large excess indicates a calibration problem, not a data problem. This is a structural check, not validation.
 
 ## Outputs
 
-`fused_cases.parquet`, `evidence_cards.parquet` (top 10,000; others rendered on demand), `group_priorities.parquet`, `influence_components.parquet` (per-variable local scores and domain totals), `fusion_report.json/.md`, `run_metadata.json`, append-only `review_audit.sqlite`.
+`fused_cases.parquet` (person and household cases with lanes, tier, queue position, impact, FSU context), `value_evidence.parquet` (every per-variable tail probability and the stored values it came from, read by the case page), `impact_domains.parquet`, `evidence_cards.parquet` (queued cases), `group_priorities.parquet`, `fusion_report.json/.md`, `run_metadata.json`, and the append-only, hash-chained `review_audit.sqlite`.
+
+## Decisions and feedback
+
+Decisions use the taxonomy confirmed error / valid but unusual / needs field verification / cannot verify / escalate, each with a reason code, how it was verified, an optional corrected item and value, and time on case (`fusion/review.py`). `fusion/feedback.py` turns decisions into per-lane confirmed-error shares with Wilson intervals and may *propose* a threshold change; nothing is applied automatically.

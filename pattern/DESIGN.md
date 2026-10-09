@@ -1,5 +1,14 @@
 # PLFS Pattern / Group / Temporal Evidence — V1 design
 
+## Current method: `plfs-pattern-v2.0` (October 2026)
+
+* **FSU-level alerts** (W5.2): each FSU's dispersion-adjusted check p-values are combined with the Cauchy combination test (valid under dependence) and Benjamini–Hochberg is applied across FSUs (`fsu_summary.parquet`). The old "minimum q over ~10 checks" did not control the FSU-level false discovery rate.
+* **Local dispersion** (W5.3): φ per State × sector where ≥ 30 FSUs are assessed, national otherwise (`dispersion_scope`).
+* **Age/sex-standardised status mix** (W5.4): expected status counts from leave-FSU-out age-band × sex rates; an FSU is not flagged for its demography.
+* **Fieldwork paradata** (W5.5, `fieldwork.py`): interview duration (one-sided), share of households interviewed on one day (empirical p among comparable FSUs), response-code mix, substitution share. Worded as fieldwork patterns, never as an enumerator (no investigator code exists).
+* **Near-duplicate persons across households** (W5.6): pairs agreeing on ≥ 95% of ≥ 15 jointly answered items, tested against the comparable-FSU pair rate.
+* Not done: Monte Carlo exact G for very small FSUs (W5.7). None of this has been evaluated (clean-FSU alert rate, per-variant recall).
+
 ## Purpose and scope
 
 Pattern V1.1 produces aggregate evidence for human review: whether an FSU or time series has an unusual response pattern relative to a carefully bounded reference. It does not decide that a record is wrong, infer an error probability, correct data, attribute a pattern to an enumerator, or combine scores with Statistical, Contextual, or ML evidence.

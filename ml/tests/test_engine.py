@@ -12,6 +12,7 @@ def _prepared_rows(count: int = 40) -> list[dict[str, object]]:
     return [{
         "MoSPI_source_row": i + 2, "MoSPI_record_key": f"q|1|h{i}", "MoSPI_release": "2024", "MoSPI_observation": "first_visit", "MoSPI_design_period": "pre_2025", "MoSPI_visit": "V1", "MoSPI_state": "01", "MoSPI_sector": "1", "MoSPI_fsu": "100", "MoSPI_prepared_status": "ready_for_downstream_preparation_only",
         "Person_Serial_No": "1", "Age": str(20 + i % 30), "Sex": "1", "General_Education_Level": "07", "CWS_Status_Code": "11", "Principal_Occupation_Code": "522", "Principal_Industry_Code": "4711", "Day7_Total_Hours": str(7 + i % 3), "CWS_Earnings_Salaried": str(100 + i), "CWS_Earnings_SelfEmployed": "0",
+        "MoSPI_quarter": "Q3", "Day7_Act1_Status_Code": "11", "Day7_Act1_Industry_Code": "47", "Day7_Act1_Wage": "0",
     } for i in range(count)]
 
 

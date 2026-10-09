@@ -28,13 +28,13 @@ SERVED_FILES = {
     "statistical": ["statistical_evidence.parquet", "statistical_report.json", "run_metadata.json"],
     "contextual": ["contextual_evidence.parquet", "run_metadata.json"],
     "ml": ["isolation_forest_evidence.parquet", "lof_evidence.parquet", "conditional_model_evidence.parquet", "similarity_evidence.parquet",
-           "ml_report.json", "run_metadata.json"],
-    "pattern": ["pattern_evidence.parquet", "pattern_report.json", "run_metadata.json"],
+           "ml_report.json", "model_registry.json", "run_metadata.json"],
+    "pattern": ["pattern_evidence.parquet", "fsu_summary.parquet", "pattern_report.json", "run_metadata.json"],
     "historical": ["historical_record_evidence.parquet", "aggregate_indicators.parquet", "historical_report.json", "run_metadata.json"],
-    "integrity": ["integrity_violations.parquet", "integrity_report.json", "run_metadata.json"],
+    "integrity": ["integrity_violations.parquet", "integrity_report.json", "rule_dry_run.json", "run_metadata.json"],
 }
 FUSION_FILES = ["fused_cases.parquet", "evidence_cards.parquet", "group_priorities.parquet", "influence_components.parquet",
-                "fusion_report.json", "fusion_report.md", "run_metadata.json"]
+                "value_evidence.parquet", "impact_domains.parquet", "fusion_report.json", "fusion_report.md", "run_metadata.json"]
 
 
 def _copy(source: Path, destination: Path, keep_existing: bool = False) -> int:

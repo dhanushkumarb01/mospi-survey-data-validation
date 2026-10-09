@@ -2,106 +2,283 @@
 #
 # Each rule is a deterministic check that a supervisor or HSD official can read
 # and edit.  Field names are survey CONCEPTS; each release maps concepts to its
-# own CSV columns (integrity/engine.py: concept_columns).  Add a rule by copying
-# a block; supported types: allowed_values, range, required_when,
-# value_when, not_value_when, unique.
+# own CSV columns (survey_rules/plfs_integrity.py, integrity/engine.py).
 #
-# Only rules stated in supplied PLFS documents are listed.  A violation is a
+# Mandatory metadata: id, version, type, level, severity (error = hard,
+# warning = soft), message, source (citation), owner, approval_status
+# (approved | draft | retired), and at least one violating and one passing
+# test case.  Test cases run every time the rules are loaded.
+#
+# "Dry run" in a comment is the number of violations found on the stored,
+# released (post-scrutiny) data when the rule was transcribed
+# (2023-24 / 2024 / 2025 first visit); a hard rule should be ~0.
+#
+# Only rules stated in supplied PLFS documents are approved.  A violation is a
 # breach of a documented questionnaire rule; it is reported for review and
 # nothing in the survey data is changed.
-version: plfs-person-rules-v1.0
+version: plfs-person-rules-v2.0
 rules:
   - id: R01_CWS_STATUS_CODE
+    version: 1
     type: allowed_values
+    level: person
     field: cws_status
     values: ["11","12","21","31","41","42","51","61","62","71","72","81","82","91","92","93","94","95","97","98","99"]
     severity: error
     message: Current weekly activity status is not a documented code.
-    source: "Code list, Codes for Block 6, item 5"
+    source: "Schedule 10.4 codes for Block 6, items 3.1-3.7 col. 4 / item 5"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {cws_status: "33"}}
+      - {expect: pass, record: {cws_status: "31"}}
 
   - id: R02_AGE_RANGE
+    version: 1
     type: range
+    level: person
     field: age
     min: 0
     max: 120
     severity: error
     message: Age is outside 0-120 years.
     source: "Plausibility bound (not a PLFS-specified limit); age is recorded in completed years (Vol. I Block 4)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {age: "130"}}
+      - {expect: pass, record: {age: "45"}}
 
   - id: R03_STATUS_99_ONLY_UNDER_5
+    version: 1
     type: value_when
+    level: person
     when: {field: age, max: 4}
     field: cws_status
     values: ["99"]
     severity: error
     message: A person aged under 5 must have activity status 99.
     source: "Code list, Codes for Block 6 item 5: status 99 for persons age < 5"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {age: "3", cws_status: "31"}}
+      - {expect: pass, record: {age: "3", cws_status: "99"}}
 
   - id: R04_UNDER_5_ONLY_WITH_STATUS_99
+    version: 1
     type: not_value_when
+    level: person
     when: {field: age, min: 5}
     field: cws_status
     values: ["99"]
     severity: error
     message: Activity status 99 is recorded for a person aged 5 or more.
     source: "Code list, Codes for Block 6 item 5: status 99 for persons age < 5"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {age: "30", cws_status: "99"}}
+      - {expect: pass, record: {age: "30", cws_status: "31"}}
 
   - id: R05_SALARIED_EARNINGS_ONLY_FOR_31_71_72
+    version: 1
     type: value_when
+    level: person
     when: {field: cws_status, not_in: ["31","71","72"]}
     field: earnings_salaried
     values: [0]
     severity: error
     message: Salaried earnings are recorded although the activity status does not route to Block 6 item 9.
-    source: "Vol. I §3.6.17"
+    source: "Vol. I §3.6.17; Schedule 10.4 Block 6 item 9 (for 31, 71 or 72 in item 5)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {cws_status: "91", earnings_salaried: "12000"}}
+      - {expect: pass, record: {cws_status: "91", earnings_salaried: "0"}}
 
   - id: R06_SELF_EMPLOYMENT_EARNINGS_ONLY_FOR_SELF_EMPLOYED
+    version: 1
     type: value_when
+    level: person
     when: {field: cws_status, not_in: ["11","12","21","61","62"]}
     field: earnings_self_employed
     values: [0]
     severity: error
     message: Self-employment earnings are recorded although the activity status does not route to Block 6 item 10.
-    source: "Vol. I §3.6.18"
+    source: "Vol. I §3.6.18; Schedule 10.4 Block 6 item 10 (if entry 11, 12, 61, 62 in item 5)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {cws_status: "31", earnings_self_employed: "5000"}}
+      - {expect: pass, record: {cws_status: "31", earnings_self_employed: "0"}}
 
   - id: R07_HELPER_EARNINGS_ZERO
+    version: 1
     type: value_when
+    level: person
     when: {field: cws_status, in: ["21"]}
     field: earnings_self_employed
     values: [0]
     severity: error
     message: Earnings of a helper in a household enterprise must be 0.
     source: "Vol. I §1.5.26(g), §3.6.18"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {cws_status: "21", earnings_self_employed: "3000"}}
+      - {expect: pass, record: {cws_status: "21", earnings_self_employed: "0"}}
 
   - id: R08_SALARIED_EARNINGS_NOT_NEGATIVE
+    version: 1
     type: range
+    level: person
     field: earnings_salaried
     min: 0
     severity: error
     message: Salaried earnings are negative; only self-employment earnings may be negative.
     source: "Vol. I §3.6.17-3.6.18 (negative sign provided for item 10 only)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {earnings_salaried: "-500"}}
+      - {expect: pass, record: {earnings_salaried: "500"}}
 
   - id: R09_DAY7_HOURS_WITHIN_A_DAY
+    version: 1
     type: range
+    level: person
     field: day7_hours
     min: 0
     max: 24
     severity: error
     message: Hours worked on day 7 are outside 0-24.
     source: "Vol. I §3.6.9 (hours actually worked on a day)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {day7_hours: "26"}}
+      - {expect: pass, record: {day7_hours: "8"}}
 
   - id: R10_NO_WORK_HOURS_FOR_NON_WORKERS
+    version: 1
     type: value_when
+    level: person
     when: {field: cws_status, in: ["81","82","91","92","93","94","95","97","98","99"]}
     field: day7_hours
     values: [0]
     severity: warning
     message: Work hours on day 7 are recorded for a person whose current weekly status is not a worker status.
     source: "Vol. I Box 7 and §3.6.9 (hours relate to work statuses 11-72)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {cws_status: "91", day7_hours: "6"}}
+      - {expect: pass, record: {cws_status: "91", day7_hours: "0"}}
 
   - id: R11_UNIQUE_PERSON
+    version: 1
     type: unique
+    level: person
     fields: [record_key, person_serial]
     severity: error
     message: The same household key and person serial occur more than once.
     source: "Release README common primary key"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: pass, record: {record_key: "h1", person_serial: "1"}}
+      - {expect: violation, records: [{record_key: "h1", person_serial: "1"}, {record_key: "h1", person_serial: "1"}]}
+
+  # Dry run (2023-24 / 2024 / 2025): 0 / 0 / 0.
+  - id: R12_DAY7_TOTAL_COVERS_WORK_ACTIVITIES
+    version: 1
+    type: lower_bound_sum
+    level: person
+    target: day7_hours
+    terms:
+      - {field: day7_act1_hours, when: {field: day7_act1_status, in: ["11","12","21","31","41","42","51"]}}
+      - {field: day7_act2_hours, when: {field: day7_act2_status, in: ["11","12","21","31","41","42","51"]}}
+    severity: error
+    message: Total hours actually worked on day 7 are less than the hours of the day's recorded work activities.
+    source: "Schedule 10.4 Block 6 col. (6) hours actually worked for status 11-51 and col. (7) total hours actually worked considering all the work performed during the day"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {day7_hours: "6", day7_act1_status: "31", day7_act1_hours: "8", day7_act2_status: "", day7_act2_hours: ""}}
+      - {expect: pass, record: {day7_hours: "8", day7_act1_status: "31", day7_act1_hours: "8", day7_act2_status: "", day7_act2_hours: ""}}
+      - {expect: pass, record: {day7_hours: "0", day7_act1_status: "62", day7_act1_hours: "8", day7_act2_status: "", day7_act2_hours: ""}}
+
+  # Dry run (2025 only; the item is not released for 2023-24 / 2024): 0 of 1,148,634.
+  - id: R13_WEEKLY_HOURS_TOTAL
+    version: 1
+    type: arithmetic
+    level: person
+    target: weekly_hours
+    terms:
+      - {field: day1_hours}
+      - {field: day2_hours}
+      - {field: day3_hours}
+      - {field: day4_hours}
+      - {field: day5_hours}
+      - {field: day6_hours}
+      - {field: day7_hours}
+    tolerance: 0
+    severity: error
+    message: Total hours worked during the week do not equal the sum of the seven daily totals.
+    source: "Schedule 10.4 Block 6 item 4: total hours actually worked during the week (total of entries in items 3.1 to 3.7)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {weekly_hours: "50", day1_hours: "8", day2_hours: "8", day3_hours: "8", day4_hours: "8", day5_hours: "8", day6_hours: "8", day7_hours: "0"}}
+      - {expect: pass, record: {weekly_hours: "48", day1_hours: "8", day2_hours: "8", day3_hours: "8", day4_hours: "8", day5_hours: "8", day6_hours: "8", day7_hours: "0"}}
+
+  # Dry run: positive wages occur only with status 41/42/51 (2024: 23,236 of 23,236; 2025: 62,324 of 62,325).
+  - id: R14_DAY7_WAGE_ONLY_FOR_CASUAL_LABOUR
+    version: 1
+    type: value_when
+    level: person
+    when: {field: day7_act1_status, not_in: ["41","42","51"]}
+    field: day7_wage
+    values: [0]
+    severity: error
+    message: A day-7 wage is recorded for an activity that is not casual wage labour.
+    source: "Schedule 10.4 Block 6 col. (9): for 41, 42, 51 in column 4, wage earnings (received/receivable) for the work"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {day7_act1_status: "31", day7_wage: "400"}}
+      - {expect: pass, record: {day7_act1_status: "51", day7_wage: "400"}}
+
+  # Dry run (2024): 0 persons aged 60+ with an attendance code.
+  - id: R15_ATTENDANCE_ONLY_UP_TO_59
+    version: 1
+    type: absent_when
+    level: person
+    when: {field: age, min: 60}
+    field: attendance
+    severity: error
+    message: Status of current attendance is recorded for a person aged 60 or more.
+    source: "Schedule 10.4 Block 4 col. (15): status of current attendance, for persons of age 0 to 59 years"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, record: {age: "65", attendance: "24"}}
+      - {expect: pass, record: {age: "65", attendance: ""}}
+
+  # Soft plausibility check, not a schedule rule: needs HSD approval before use.
+  - id: S01_DEGREE_UNDER_AGE_18
+    version: 1
+    type: value_when
+    level: person
+    when: {field: age, max: 17}
+    field: education
+    values: ["01","02","03","04","05","06","07","08","10","11","1","2","3","4","5","6","7","8"]
+    severity: warning
+    message: A graduate or postgraduate education level is recorded for a person under 18.
+    source: "Plausibility check proposed by the platform team (education level vs age); not stated in Vol. I"
+    owner: Platform team (proposal)
+    approval_status: draft
+    tests:
+      - {expect: violation, record: {age: "15", education: "12"}}
+      - {expect: pass, record: {age: "15", education: "08"}}

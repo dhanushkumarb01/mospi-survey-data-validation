@@ -41,11 +41,31 @@ SELF_EMPLOYED_ZERO_BY_DEFINITION = frozenset({"21"})
 # (e.g. a day off) is a genuine value.
 WORKER_STATUSES = frozenset({"11", "12", "21", "31", "41", "42", "51", "61", "62", "71", "72"})
 
+# Schedule 10.4 (first visit), Block 6 col. (9): "for 41, 42, 51 in column 4,
+# wage earnings (received/receivable) for the work (Rs.)".  The day-wise wage
+# is therefore governed by that day's *activity* status, not by the CWS.
+# Verified on the stored releases: a positive day-7 activity-1 wage occurs
+# only with day-7 activity-1 status 41/42/51 (2024: 23,236 of 23,236; 2025:
+# 62,324 of 62,325), and every other status carries 0.
+CASUAL_WAGE_STATUSES = frozenset({"41", "42", "51"})
+
 TARGET_APPLICABILITY: dict[str, dict[str, frozenset[str]]] = {
     "cws_earnings_salaried": {"applicable": SALARIED_EARNINGS_STATUSES, "zero_by_definition": frozenset()},
     "cws_earnings_self_employed": {"applicable": SELF_EMPLOYED_EARNINGS_STATUSES, "zero_by_definition": SELF_EMPLOYED_ZERO_BY_DEFINITION},
     "day7_total_hours": {"applicable": WORKER_STATUSES, "zero_by_definition": frozenset()},
+    "day7_casual_wage": {"applicable": CASUAL_WAGE_STATUSES, "zero_by_definition": frozenset()},
 }
+# The coded item whose value decides applicability (a concept name resolved
+# per release through peer_groups.config.SourceProfile.context_columns).
+TARGET_STATUS_CONCEPT: dict[str, str] = {
+    "cws_earnings_salaried": "cws_status", "cws_earnings_self_employed": "cws_status",
+    "day7_total_hours": "cws_status", "day7_casual_wage": "day7_activity1_status",
+}
+
+
+def status_concept(target: str) -> str:
+    """Concept name of the status item that governs ``target``'s applicability."""
+    return TARGET_STATUS_CONCEPT.get(target, "cws_status")
 
 
 def _clean(value: object) -> str:

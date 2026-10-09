@@ -23,9 +23,11 @@ from scipy import stats
 
 from peer_groups.config import SOURCE_PROFILES
 from survey_rules import APPLICABLE, applicability_series
+from survey_rules.schema import read_parquet
 from preprocessing.config import CONTRACTS
 
-from .config import PATTERN_METHOD_VERSION, PATTERN_SPECIFICATION_VERSION, READY_STATUS, PatternParameters
+from .config import DUPLICATE_FIELDS, PATTERN_METHOD_VERSION, PATTERN_SPECIFICATION_VERSION, READY_STATUS, PatternParameters
+from .fieldwork import duplicate_checks, duration_checks, g_test, response_checks
 from .reporting import utc_now, write_json, write_markdown_report
 
 
@@ -41,6 +43,9 @@ class RunConfig:
     parameters: PatternParameters = PatternParameters()
     revisit_prepared_person_path: Path | None = None
     revisit_statistical_run_path: Path | None = None
+    # Household file of the same preparation run (paradata checks, W5.5).
+    # Defaults to prepared_households.parquet beside the person file.
+    prepared_household_path: Path | None = None
 
 
 COMMON_COLUMNS = (
@@ -49,7 +54,7 @@ COMMON_COLUMNS = (
     "reference_definition", "n", "reference_n", "raw_metric", "evidence_score", "evidence_rank",
     "assessability_status", "assessability_reason", "evidence_statement", "method_id", "method_version",
     "preprocessing_run_id", "pattern_run_id", "details_json", "p_value", "q_value", "notable",
-    "p_value_unadjusted", "dispersion_factor",
+    "p_value_unadjusted", "dispersion_factor", "dispersion_scope",
 )
 P_FLOOR = 1e-300
 
@@ -145,6 +150,74 @@ def benjamini_hochberg(p_values: pd.Series) -> pd.Series:
     return q
 
 
+FIELDWORK_COMPONENTS = frozenset({"interview_duration_short", "survey_date_concentration", "response_code_mix", "substitution_share", "near_duplicate_persons"})
+FSU_KEYS = ["release", "observation_type", "design_period", "visit", "month", "state", "sector", "stratum", "fsu"]
+# Checks shown with the FSU as context but not counted in its alert (FSU combination v2, 9 Oct 2026).
+# On the released (post-scrutiny) 2024 / 2025 data their dispersion-adjusted p-values fall at or below 0.01
+# far more often than 1% of the time: short interviews 13.4x / 15.9x, near-duplicate persons 2.1x / 4.9x,
+# response-code mix 5.1x / 2.8x (every other check <= 1.8x).  Households (and person pairs) within an FSU
+# are treated as independent by these tests and the median-based dispersion factor does not correct the
+# tail, so their p-values cannot be read as p-values.  They return to the alert once a cluster-robust,
+# household-size-adjusted version is calibrated (docs/V2_COMPLETION_AND_IMPLEMENTATION_REPORT.md).
+CONTEXT_ONLY_COMPONENTS = frozenset({"interview_duration_short", "near_duplicate_persons", "response_code_mix"})
+FSU_COMBINATION_METHOD = "bonferroni_min_of_calibrated_checks_then_bh_across_fsus_v2"
+
+
+def fsu_summary(table: pd.DataFrame, notable_q: float = 0.05, context_only: frozenset[str] = CONTEXT_ONLY_COMPONENTS) -> pd.DataFrame:
+    """One row per FSU: Bonferroni over its counted checks, then Benjamini-Hochberg across FSUs (plan W5.2).
+
+    The per-check q-values control false discoveries within one check type;
+    an FSU is reached by ~10 checks, so the old "minimum q over the FSU's
+    checks" did not control the FSU-level false discovery rate.
+
+    v2 (9 Oct 2026): the FSU p-value is min(1, k x smallest p) over the k
+    counted checks, valid under arbitrary dependence.  The Cauchy combination
+    used before is also valid in principle, but a check with p = 1 (no
+    near-identical pair, no busiest-day excess, ...) contributes tan(-pi/2)
+    ~ -1.6e16 and forces the combined p to 1 whatever the other checks show:
+    86% of 2024 FSUs had such a check, which silently vetoed their evidence.
+    Checks in ``context_only`` stay with the FSU for display but are not
+    counted (see CONTEXT_ONLY_COMPONENTS).
+    """
+    columns = ["group_id", *FSU_KEYS, "checks", "fsu_combined_p", "fsu_q_value", "notable", "notable_checks", "strongest_component",
+               "strongest_variable", "strongest_statement", "strongest_p", "fieldwork_signal", "context_only_notable_checks", "method"]
+    if table.empty:
+        return pd.DataFrame(columns=columns)
+    level = table["group_level"].astype(str).eq("FSU")
+    usable = table.loc[level & table["assessability_status"].eq("ASSESSABLE") & pd.to_numeric(table["p_value"], errors="coerce").notna()].copy()
+    context = usable.loc[usable["pattern_component"].isin(context_only)]
+    context_notable = context.loc[pd.to_numeric(context["q_value"], errors="coerce").lt(notable_q)].groupby("group_id").size()
+    usable = usable.loc[~usable["pattern_component"].isin(context_only)]
+    usable["p_value"] = pd.to_numeric(usable["p_value"], errors="coerce")
+    usable["_check_notable"] = pd.to_numeric(usable["q_value"], errors="coerce").lt(notable_q)
+    keys = ["group_id", *FSU_KEYS]
+    groups = table.loc[level, keys].drop_duplicates("group_id")
+    if usable.empty:
+        summary = groups.assign(checks=0, fsu_combined_p=np.nan, notable_checks=0)
+    else:
+        combined = usable.groupby("group_id", sort=False).agg(checks=("p_value", "size"), notable_checks=("_check_notable", "sum"))
+        combined["fsu_combined_p"] = (usable.groupby("group_id", sort=False)["p_value"].min() * combined["checks"]).clip(upper=1.0)
+        strongest = usable.sort_values(["p_value", "pattern_component", "variable"], kind="mergesort").drop_duplicates("group_id").set_index("group_id")
+        combined["strongest_component"] = strongest["pattern_component"]
+        combined["strongest_variable"] = strongest["variable"]
+        combined["strongest_statement"] = strongest["evidence_statement"]
+        combined["strongest_p"] = strongest["p_value"]
+        notable_components = usable.loc[usable["_check_notable"]].groupby("group_id")["pattern_component"].agg(lambda c: bool(set(c) & FIELDWORK_COMPONENTS))
+        combined["fieldwork_signal"] = notable_components.reindex(combined.index).fillna(False).astype(bool)
+        summary = groups.merge(combined.reset_index(), on="group_id", how="left")
+    summary["checks"] = summary["checks"].fillna(0).astype(int)
+    summary["notable_checks"] = summary["notable_checks"].fillna(0).astype(int)
+    summary["fsu_q_value"] = benjamini_hochberg(summary["fsu_combined_p"])
+    summary["notable"] = pd.to_numeric(summary["fsu_q_value"], errors="coerce").lt(notable_q)
+    summary["fieldwork_signal"] = summary.get("fieldwork_signal", pd.Series(False, index=summary.index)).fillna(False).astype(bool)
+    summary["context_only_notable_checks"] = summary["group_id"].map(context_notable).fillna(0).astype(int)
+    summary["method"] = FSU_COMBINATION_METHOD
+    for column in columns:
+        if column not in summary:
+            summary[column] = pd.NA
+    return summary.loc[:, columns].sort_values(["fsu_q_value", "group_id"], na_position="last", kind="mergesort").reset_index(drop=True)
+
+
 class PatternEngine:
     def __init__(self, config: RunConfig) -> None:
         self.config = replace(
@@ -199,8 +272,11 @@ class PatternEngine:
         }
         if str(metadata["release"]) == "2025":
             required.add("MoSPI_month")
+        key = (str(metadata["release"]), str(metadata["observation"]))
+        duplicate_fields = DUPLICATE_FIELDS.get(key, {})
+        required |= set(duplicate_fields.values())
         try:
-            source = pd.read_parquet(path, columns=sorted(required))
+            source = read_parquet(path, columns=sorted(required))
         except Exception as error:
             raise PatternFailure(f"Could not read Pattern input contract: {error}") from error
         for field, expected in (("MoSPI_release", metadata["release"]), ("MoSPI_observation", metadata["observation"]), ("MoSPI_design_period", metadata["design_period"])):
@@ -219,6 +295,10 @@ class PatternEngine:
         })
         if output["source_observation_id"].duplicated().any():
             raise PatternFailure("Prepared input cannot provide unique source observation IDs")
+        output["household"] = _clean(source["MoSPI_record_key"])
+        for concept, column in duplicate_fields.items():
+            output[f"dup_{concept}"] = _clean(source[column])
+        output["sex"] = output["dup_sex"] if "dup_sex" in output else ""
         for target, column in targets.items():
             if not column:
                 output[target] = pd.NA
@@ -325,8 +405,11 @@ class PatternEngine:
         rows: list[dict[str, object]] = []
         identities = self._fsu_identity(frame)
         boundary = self._boundary_columns()
+        adjusted_status = "cws_status" in frame and "sex" in frame and frame["sex"].astype(str).ne("").any() and "age" in frame
+        if adjusted_status:
+            rows.extend(self._status_mix_adjusted(frame))
         for variable in (*self.config.parameters.categorical_targets, *self.config.parameters.numerical_targets):
-            if variable not in frame:
+            if variable not in frame or (variable == "cws_status" and adjusted_status):
                 continue
             categorical = variable in self.config.parameters.categorical_targets
             values = _clean(frame[variable]) if categorical else self._values(frame, variable)
@@ -382,7 +465,110 @@ class PatternEngine:
                                  if direction else f"FSU {item.fsu}: the distribution of {variable} differs from comparable FSUs although the medians are equal ({own_med:g}).")
                 rows.append(self._row(component="fsu_distribution_shift", base=base, variable=variable, n=n, reference_n=reference_n,
                                       raw_metric=float(metric), status="ASSESSABLE", statement=statement, details=details, p_value=p_value))
-        return self._rank(pd.DataFrame(rows))
+        return self._rank(pd.DataFrame(rows), self.config.parameters.minimum_local_dispersion_fsus)
+
+    def _status_mix_adjusted(self, frame: pd.DataFrame) -> list[dict[str, object]]:
+        """Activity-status mix after allowing for the FSU's age and sex composition (indirect standardisation, W5.4).
+
+        Expected count of status s in the FSU = sum over its members of the
+        leave-FSU-out rate of s among comparable people of the same age band
+        and sex (smoothed towards the cell's overall status mix).  A G-test
+        compares observed with expected counts.  An FSU with many students or
+        elderly people is therefore not flagged merely for its demography.
+        """
+        p = self.config.parameters
+        rows: list[dict[str, object]] = []
+        boundary = self._boundary_columns()
+        work = frame[boundary + ["fsu"]].copy()
+        work["status"] = _clean(frame["cws_status"])
+        age = pd.to_numeric(frame["age"], errors="coerce")
+        work["stratum_as"] = (np.floor(age / p.status_mix_age_band_width).clip(0, 8).astype("Int64").astype("string") + "|" + _clean(frame["sex"]))
+        work = work.loc[work["status"].ne("") & age.notna().to_numpy() & _clean(frame["sex"]).ne("").to_numpy()]
+        identities = self._fsu_identity(frame).set_index(boundary + ["fsu"])
+        for cell_key, cell in work.groupby(boundary, sort=False, observed=True):
+            categories = sorted(cell["status"].unique())
+            table = pd.crosstab([cell["fsu"], cell["stratum_as"]], cell["status"]).reindex(columns=categories, fill_value=0)
+            cell_by_as = table.groupby(level=1).sum()
+            cell_marginal = table.sum(axis=0).to_numpy(dtype=float)
+            for fsu, own in table.groupby(level=0):
+                key = tuple(cell_key) + (fsu,)
+                if key not in identities.index:
+                    continue
+                base = {"group_id": identities.loc[key, "group_id"], "fsu": fsu, **dict(zip(boundary, cell_key))}
+                own = own.droplevel(0)
+                n = int(own.to_numpy().sum())
+                reference_n = int(cell_marginal.sum() - n)
+                gated = self._gate("fsu_distribution_shift", base, "cws_status", n, reference_n, p.minimum_fsu_population)
+                if gated:
+                    rows.append(gated); continue
+                if len(categories) < 2:
+                    rows.append(self._row(component="fsu_distribution_shift", base=base, variable="cws_status", n=n, reference_n=reference_n, reason="NO_VARIATION_IN_CELL")); continue
+                ref_marginal = cell_marginal - own.sum(axis=0).to_numpy(dtype=float)
+                prior = (ref_marginal + 0.5) / (ref_marginal.sum() + 0.5 * len(categories))
+                ref_by_as = cell_by_as.loc[own.index].to_numpy(dtype=float) - own.to_numpy(dtype=float)
+                rates = (ref_by_as + p.status_mix_prior_strength * prior) / (ref_by_as.sum(axis=1, keepdims=True) + p.status_mix_prior_strength)
+                expected = (own.sum(axis=1).to_numpy(dtype=float)[:, None] * rates).sum(axis=0)
+                observed = own.sum(axis=0).to_numpy(dtype=float)
+                p_value, g = g_test(observed, expected)
+                share_obs, share_exp = observed / n, expected / n
+                largest = int(np.argmax(np.abs(share_obs - share_exp)))
+                statement = (f"FSU {fsu}: after allowing for the age and sex of its members, {share_obs[largest]:.0%} have activity status "
+                             f"{categories[largest]}, compared with {share_exp[largest]:.0%} expected from comparable FSUs.")
+                rows.append(self._row(component="fsu_distribution_shift", base=base, variable="cws_status", n=n, reference_n=reference_n,
+                                      raw_metric=float(g), status="ASSESSABLE", statement=statement, p_value=p_value,
+                                      details={"test": "G-test of observed against age/sex-standardised expected counts (Williams-corrected)",
+                                               "composition_adjusted": True, "categories": categories, "fsu_proportions": share_obs.tolist(),
+                                               "reference_proportions": share_exp.tolist(), "largest_difference_category": categories[largest],
+                                               "standardisation": f"{p.status_mix_age_band_width}-year age band x sex, leave-FSU-out rates smoothed towards the cell mix"}))
+        return rows
+
+    def _fieldwork(self, frame: pd.DataFrame, metadata: dict[str, object], contract) -> pd.DataFrame:
+        """Household paradata and near-duplicate answer sets per FSU (W5.5, W5.6)."""
+        p = self.config.parameters
+        rows: list[dict[str, object]] = []
+        households = self._households(metadata, contract)
+        if households is not None:
+            rows += duration_checks(households, p.minimum_fsu_households, p.minimum_reference_households)
+            rows += response_checks(households, p.minimum_fsu_households, p.minimum_reference_households)
+        duplicate_columns = [c for c in frame.columns if c.startswith("dup_")]
+        if duplicate_columns:
+            rows += duplicate_checks(frame, duplicate_columns, p.duplicate_minimum_common_fields, p.duplicate_similarity_threshold, p.minimum_reference_pairs)
+        identities = self._fsu_identity(frame).set_index(self._boundary_columns() + ["fsu"])["group_id"]
+        output = []
+        for item in rows:
+            key = tuple(item["cell"]) + (item["fsu"],)
+            base = {"group_id": identities.get(key, "fsu_" + hashlib.sha256(_canonical(list(map(str, key))).encode()).hexdigest()[:24]),
+                    "fsu": item["fsu"], **dict(zip(self._boundary_columns(), item["cell"]))}
+            if item["status"] != "ASSESSABLE":
+                output.append(self._row(component=item["component"], base=base, variable=item["variable"], n=item.get("n", 0),
+                                        reference_n=item.get("reference_n", 0), reason=item.get("reason")))
+                continue
+            output.append(self._row(component=item["component"], base=base, variable=item["variable"], n=item["n"], reference_n=item["reference_n"],
+                                    raw_metric=item.get("raw_metric"), status="ASSESSABLE", statement=item["statement"], details=item.get("details"),
+                                    p_value=item["p_value"]))
+        return self._rank(pd.DataFrame(output), p.minimum_local_dispersion_fsus) if output else pd.DataFrame()
+
+    def _households(self, metadata: dict[str, object], contract) -> pd.DataFrame | None:
+        path = self.config.prepared_household_path or self.config.prepared_person_path.parent / "prepared_households.parquet"
+        if not Path(path).is_file():
+            self._fieldwork_note = f"Household file not found ({Path(path).name}); paradata checks not run."
+            return None
+        fields = contract.household_fields
+        wanted = {"survey_date": fields.get("survey_date"), "survey_duration": fields.get("survey_duration"), "response": fields.get("response"),
+                  "survey_code": fields.get("survey_code")}
+        required = ["MoSPI_release", "MoSPI_observation", "MoSPI_design_period", "MoSPI_visit", "MoSPI_state", "MoSPI_sector", "MoSPI_stratum",
+                    "MoSPI_fsu", "MoSPI_prepared_status", *[c for c in wanted.values() if c]]
+        if str(metadata["release"]) == "2025":
+            required.append("MoSPI_month")
+        frame = read_parquet(path, columns=required)
+        output = pd.DataFrame({"release": _clean(frame["MoSPI_release"]), "observation_type": _clean(frame["MoSPI_observation"]),
+                               "design_period": _clean(frame["MoSPI_design_period"]), "visit": _clean(frame["MoSPI_visit"]),
+                               "month": _clean(frame["MoSPI_month"]) if "MoSPI_month" in frame else "", "state": _clean(frame["MoSPI_state"]),
+                               "sector": _clean(frame["MoSPI_sector"]), "stratum": _clean(frame["MoSPI_stratum"]), "fsu": _clean(frame["MoSPI_fsu"])})
+        for name, column in wanted.items():
+            output[name] = _clean(frame[column]) if column else ""
+        ready = _clean(frame["MoSPI_prepared_status"]).eq(READY_STATUS) & output[["state", "sector", "stratum", "fsu"]].ne("").all(axis=1)
+        return output.loc[ready].reset_index(drop=True)
 
     def _concentration(self, frame: pd.DataFrame) -> pd.DataFrame:
         """Lower variation: one-sided, location-free binomial test of spread.
@@ -430,7 +616,7 @@ class PatternEngine:
                                                "window_half_width": half_width, "fsu_median": float(np.median(own)), "reference_median": float(np.median(ref)),
                                                "fsu_iqr": float(np.quantile(own, .75) - np.quantile(own, .25)), "reference_iqr": float(q75 - q25),
                                                "approximation": "centring on the FSU's own median makes small-FSU p-values slightly optimistic"}))
-        return self._rank(pd.DataFrame(rows))
+        return self._rank(pd.DataFrame(rows), self.config.parameters.minimum_local_dispersion_fsus)
 
     def _heaping(self, frame: pd.DataFrame) -> pd.DataFrame:
         """Age heaping: one-sided binomial test of the share of values ending in 0 or 5.
@@ -469,7 +655,7 @@ class PatternEngine:
                                       details={"test": "one-sided binomial (share ending in 0 or 5 greater than reference share)",
                                                "fsu_share_ending_0_or_5": share, "reference_share_ending_0_or_5": expected,
                                                "count_ending_0_or_5": k, "direction": "higher" if higher else "not higher"}))
-        return self._rank(pd.DataFrame(rows))
+        return self._rank(pd.DataFrame(rows), self.config.parameters.minimum_local_dispersion_fsus)
 
     def _temporal(self, frame: pd.DataFrame) -> pd.DataFrame:
         """FSU-level preceding-period comparison (kept for panel deliveries).
@@ -517,7 +703,7 @@ class PatternEngine:
                     rows.append(self._row(**common, reference_n=len(history), raw_metric=change, score=abs(change) / scale, status="ASSESSABLE",
                                           statement=f"The FSU-level {metric_name} changed by {change:g} relative to its preceding-period baseline.",
                                           details={"baseline": baseline, "historical_change_mad_like_scale": scale, "time_axis": time_col}))
-        return self._rank(pd.DataFrame(rows))
+        return self._rank(pd.DataFrame(rows), self.config.parameters.minimum_local_dispersion_fsus)
 
     def _revisit(self, frame: pd.DataFrame, metadata: dict[str, object]) -> pd.DataFrame:
         if not self.config.revisit_prepared_person_path:
@@ -547,10 +733,10 @@ class PatternEngine:
             if refn<self.config.parameters.minimum_reference_population: rows.append(self._row(component="revisit_transition_patterns",base=base,variable=target,n=n,reference_n=refn,reason="REFERENCE_GROUP_BELOW_MINIMUM")); continue
             rate=float(item.transition_count/item.n); rrate=float((item.total_transition-item.transition_count)/refn); pval=float(stats.binomtest(int(item.transition_count),n,min(max(rrate,1e-9),1-1e-9)).pvalue) if 0<rrate<1 else 1.0
             rows.append(self._row(component="revisit_transition_patterns",base=base,variable=target,n=n,reference_n=refn,raw_metric=rate,status="ASSESSABLE",p_value=pval,statement=f"FSU {fsu}: {rate:.0%} of linked revisit changes are in the tails of their comparison group, compared with {rrate:.0%} in comparable FSUs.",details={"transition_count":int(item.transition_count),"transition_rate":rate,"reference_transition_rate":rrate,"transition_definition":"existing_statistical_revisit_change_distribution_position_in_lower_or_upper_tail"}))
-        return self._rank(pd.DataFrame(rows))
+        return self._rank(pd.DataFrame(rows), self.config.parameters.minimum_local_dispersion_fsus)
 
     @staticmethod
-    def _rank(table: pd.DataFrame) -> pd.DataFrame:
+    def _rank(table: pd.DataFrame, minimum_local_fsus: int = 30) -> pd.DataFrame:
         """Percentile rank of the score, plus BH q-values within component/variable.
 
         ``notable`` (q < 0.05) is the only threshold used for wording; ranks
@@ -564,10 +750,23 @@ class PatternEngine:
         with_p = assessable & pd.to_numeric(table.p_value, errors="coerce").notna()
         table["p_value_unadjusted"] = table["p_value"]
         table["dispersion_factor"] = np.nan
+        table["dispersion_scope"] = pd.NA
         for (component, _), index in table.loc[with_p].groupby(["pattern_component", "variable"], observed=True).groups.items():
-            adjusted, phi = overdispersion_adjust(table.loc[index, "p_value"].astype(float), one_sided=component in ONE_SIDED)
+            one_sided = component in ONE_SIDED
+            part = table.loc[index]
+            adjusted, phi = overdispersion_adjust(part["p_value"].astype(float), one_sided=one_sided)
+            phis = pd.Series(phi, index=index, dtype=float)
+            scope = pd.Series("NATIONAL", index=index, dtype="string")
+            # Heterogeneity differs by State and sector: estimate it locally where enough FSUs exist (W5.3).
+            for _, local in part.groupby(["state", "sector"], observed=True, dropna=False).groups.items():
+                if len(local) >= minimum_local_fsus:
+                    local_adjusted, local_phi = overdispersion_adjust(part.loc[local, "p_value"].astype(float), one_sided=one_sided)
+                    adjusted.loc[local] = local_adjusted
+                    phis.loc[local] = local_phi
+                    scope.loc[local] = "STATE_SECTOR"
             table.loc[index, "p_value"] = adjusted.to_numpy()
-            table.loc[index, "dispersion_factor"] = phi
+            table.loc[index, "dispersion_factor"] = phis.to_numpy()
+            table.loc[index, "dispersion_scope"] = scope.to_numpy()
             table.loc[index, "evidence_score"] = -np.log10(adjusted.clip(lower=P_FLOOR)).to_numpy()
             table.loc[index, "q_value"] = benjamini_hochberg(table.loc[index, "p_value"]).to_numpy()
         table.loc[assessable, "evidence_rank"] = table.loc[assessable].groupby(["pattern_component", "variable"], observed=True).evidence_score.rank(pct=True, method="average")
@@ -588,7 +787,9 @@ class PatternEngine:
     def run(self) -> Path:
         started=time.perf_counter(); metadata,profile,contract=self._validate(); base=self._group_frame(self._base(metadata,profile,contract)); self.preprocessing_run_id=str(metadata["run_id"]); self.pattern_run_id=self.config.run_id or str(uuid.uuid4())
         destination=self.config.output_root/f"{metadata['release']}_{metadata['observation']}_{self.pattern_run_id}"; destination.mkdir(parents=True,exist_ok=False)
-        builders={"fsu_distribution_shift.parquet":self._distribution,"concentration_evidence.parquet":self._concentration,"heaping_evidence.parquet":self._heaping,"temporal_drift.parquet":self._temporal,"revisit_pattern_evidence.parquet":lambda _:self._revisit(base,metadata)}
+        self._fieldwork_note = None
+        builders={"fsu_distribution_shift.parquet":self._distribution,"concentration_evidence.parquet":self._concentration,"heaping_evidence.parquet":self._heaping,"temporal_drift.parquet":self._temporal,"revisit_pattern_evidence.parquet":lambda _:self._revisit(base,metadata),
+                  "fieldwork_evidence.parquet":lambda _:self._fieldwork(base,metadata,contract)}
         summaries={}
         # Persist one component at a time.  Prepared releases are large, and
         # retaining five wide evidence tables while calculating the next one
@@ -600,7 +801,11 @@ class PatternEngine:
             del table
             gc.collect()
         combined=self._normalise(pd.concat([pd.read_parquet(destination/name) for name in builders],ignore_index=True)); combined.to_parquet(destination/"pattern_evidence.parquet",index=False)
-        report={"records_processed":int(len(base)),"fsu_groups":int(base[self._boundary_columns()+["fsu"]].drop_duplicates().shape[0]),"runtime_seconds":round(time.perf_counter()-started,3),"components":summaries,"warnings":["Pattern V1 uses dedicated leave-FSU-out stratum references; it does not reinterpret an FSU as an enumerator.","Temporal drift uses preceding-period history inside one prepared release and deliberately does not estimate seasonality or cross the January-2025 structural break.","Revisit patterns aggregate only the existing 2023-24 statistical linked-change tail definition when a matching validated statistical run is supplied."]}
-        run_metadata={"run_id":self.pattern_run_id,"processing_timestamp_utc":utc_now(),"software_version":"0.1.0","pattern_method_version":PATTERN_METHOD_VERSION,"pattern_specification_version":PATTERN_SPECIFICATION_VERSION,"input_preprocessing_run_id":self.preprocessing_run_id,"input_prepared_person_path":str(self.config.prepared_person_path),"release":metadata["release"],"observation":metadata["observation"],"design_period":metadata["design_period"],"parameters":self.config.parameters.__dict__,"revisit_prepared_person_path":str(self.config.revisit_prepared_person_path) if self.config.revisit_prepared_person_path else None,"revisit_statistical_run_path":str(self.config.revisit_statistical_run_path) if self.config.revisit_statistical_run_path else None,"output_files":[*builders,"pattern_evidence.parquet","pattern_report.json","pattern_report.md","run_metadata.json"]}
+        fsu_table=fsu_summary(combined,self.config.parameters.notable_q_value); fsu_table.to_parquet(destination/"fsu_summary.parquet",index=False)
+        summaries["fsu_summary"]={"fsus":int(len(fsu_table)),"assessable":int(fsu_table.fsu_q_value.notna().sum()),"notable_q_lt_threshold":int(fsu_table.notable.sum()),
+                                  "notable_with_fieldwork_signal":int((fsu_table.notable & fsu_table.fieldwork_signal).sum())}
+        report={"records_processed":int(len(base)),"fsu_groups":int(base[self._boundary_columns()+["fsu"]].drop_duplicates().shape[0]),"runtime_seconds":round(time.perf_counter()-started,3),"components":summaries,"fieldwork_note":self._fieldwork_note,"warnings":["Pattern uses dedicated leave-FSU-out stratum references; it does not reinterpret an FSU as an enumerator (no investigator code exists in the released data).",
+                 "FSU-level alerts use the Cauchy combination of each FSU's checks with Benjamini-Hochberg control across FSUs; per-check q-values are for wording only.","Temporal drift uses preceding-period history inside one prepared release and deliberately does not estimate seasonality or cross the January-2025 structural break.","Revisit patterns aggregate only the existing 2023-24 statistical linked-change tail definition when a matching validated statistical run is supplied."]}
+        run_metadata={"run_id":self.pattern_run_id,"processing_timestamp_utc":utc_now(),"software_version":"0.1.0","pattern_method_version":PATTERN_METHOD_VERSION,"pattern_specification_version":PATTERN_SPECIFICATION_VERSION,"input_preprocessing_run_id":self.preprocessing_run_id,"input_prepared_person_path":str(self.config.prepared_person_path),"release":metadata["release"],"observation":metadata["observation"],"design_period":metadata["design_period"],"parameters":self.config.parameters.__dict__,"revisit_prepared_person_path":str(self.config.revisit_prepared_person_path) if self.config.revisit_prepared_person_path else None,"revisit_statistical_run_path":str(self.config.revisit_statistical_run_path) if self.config.revisit_statistical_run_path else None,"prepared_household_path":str(self.config.prepared_household_path or self.config.prepared_person_path.parent/"prepared_households.parquet"),"output_files":[*builders,"pattern_evidence.parquet","fsu_summary.parquet","pattern_report.json","pattern_report.md","run_metadata.json"]}
         write_json(destination/"pattern_report.json",report);write_json(destination/"run_metadata.json",run_metadata);write_markdown_report(destination/"pattern_report.md",run_metadata,report)
         return destination

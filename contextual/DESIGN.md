@@ -1,5 +1,9 @@
 # PLFS V1 contextual / probabilistic design
 
+## Current method: `plfs-contextual-v2.1`
+
+The decision score is `coding_tail_p`: the share of the comparison group (the existing day-7 reference group, the person included) whose occupation code is at most as frequent as the person's — the conformal p-value with code frequency as the score, valid under exchangeability, smallest value 1/N. It depends on the code's *frequency*, not on the group's size, and a code seen once where many codes are seen once is not surprising. A leave-one-out Dirichlet variant (v2.0) was tried first and rejected before release: on the 2024 data it put 1.6% of records below 0.001 because leave-one-out treats every singleton as unseen (audit M1: raw surprisal grew with group size; tested by `test_coding_tail_probability_depends_on_frequency_not_group_size`). The coding lane has its own small share of the review budget and is no longer averaged into value evidence. Surprisal is still written for the A0 baseline. Not evaluated.
+
 ## Central question and boundary
 
 The implemented question is: **how often does this observed occupation response occur among comparable prepared observations?** This is contextual evidence, not a conclusion about correctness. `statistical/` measures the placement of a numeric response within its peer distribution; this package estimates an empirical conditional category frequency for one categorical response.

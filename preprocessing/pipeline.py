@@ -12,6 +12,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from survey_rules.schema import PREPARED_SCHEMA_VERSION
+
 from .config import CONTRACTS, DatasetContract
 from .reporting import Issue, utc_now, write_reports
 
@@ -224,7 +226,7 @@ class PLFSPreprocessor:
         output_dir = self.config.output_root / f"{self.contract.release}_{self.contract.observation}_{run_id}"
         output_dir.mkdir(parents=True, exist_ok=False)
         paths = {level: self.contract.file_path(self.config.input_root, level) for level in ("household", "person")}
-        metadata: dict[str, Any] = {"run_id": run_id, "processing_timestamp_utc": utc_now(), "software_version": SOFTWARE_VERSION, "survey": "PLFS", "release": self.contract.release, "observation": self.contract.observation, "design_period": self.contract.design_period, "cadence": self.contract.cadence, "configuration_contract": self.config.contract_name, "input_files": {level: str(path) for level, path in paths.items()}, "reference_files": list(self.contract.reference_files)}
+        metadata: dict[str, Any] = {"run_id": run_id, "processing_timestamp_utc": utc_now(), "software_version": SOFTWARE_VERSION, "schema_version": PREPARED_SCHEMA_VERSION, "survey": "PLFS", "release": self.contract.release, "observation": self.contract.observation, "design_period": self.contract.design_period, "cadence": self.contract.cadence, "configuration_contract": self.config.contract_name, "input_files": {level: str(path) for level, path in paths.items()}, "reference_files": list(self.contract.reference_files)}
         start = len(self.issues)
         missing_files = [str(path) for path in paths.values() if not path.is_file()]
         if missing_files:

@@ -31,6 +31,9 @@ def _first_visit_row(index: int, **updates: object) -> dict[str, object]:
         "Day7_Total_Hours": "8",
         "MoSPI_fsu": f"fsu-{index}",
         "MoSPI_weight": "9.5",
+        "MoSPI_quarter": "Q3",
+        "Day7_Act1_Status_Code": "11", "Day7_Act1_Industry_Code": "01", "Day7_Act1_Wage": "0",
+        "das17": "11", "ind17": "01", "ern17": "0",
     }
     row.update(updates)
     return row
@@ -79,7 +82,9 @@ def test_small_cells_back_off_deterministically_and_no_group_is_explicit(tmp_pat
     b = _assignments(second)
     a_salary = a[a.target_variable == "cws_earnings_salaried"]
     b_salary = b[b.target_variable == "cws_earnings_salaried"]
-    assert set(a_salary.backoff_level) == {2}
+    # Pre-2025 levels are tried within the quarter first: (L0+q, L0, L1+q, L1, L2+q, L2), so L2+q is index 4.
+    assert set(a_salary.backoff_level) == {4}
+    assert set(a_salary.grouping_dimensions) == {'["state","sector","cws_status","quarter"]'}
     pd.testing.assert_series_equal(a_salary.peer_group_id.reset_index(drop=True), b_salary.peer_group_id.reset_index(drop=True))
     no_group = _run(tmp_path, _write_prepared(tmp_path / "other", rows), minimum=4, run_id="none")
     no_group_assignments = _assignments(no_group)
@@ -97,7 +102,7 @@ def test_revisit_is_a_separate_context_limited_route_and_hours_are_unavailable(t
             "MoSPI_source_row": index + 2, "MoSPI_record_key": f"rv-{index}", "MoSPI_release": "2023_24",
             "MoSPI_observation": "revisit", "MoSPI_design_period": "pre_2025", "MoSPI_visit": "V2",
             "MoSPI_prepared_status": "ready_for_downstream_preparation_only", "MoSPI_state": "01", "MoSPI_sector": "2",
-            "b4q1_pervv": "1", "b6q5_perrv": "11", "b6q9_perrv": "100", "b6q10_perrv": "0",
+            "b4q1_pervv": "1", "b6q5_perrv": "11", "b6q9_perrv": "100", "b6q10_perrv": "0", "MoSPI_quarter": "Q1",
         })
     destination = _run(tmp_path, _write_prepared(tmp_path, rows, release="2023_24", observation="revisit"))
     assignments = _assignments(destination)
@@ -117,7 +122,7 @@ def test_post_2025_month_is_a_mandatory_boundary(tmp_path: Path) -> None:
                 "MoSPI_observation": "first_visit", "MoSPI_design_period": "post_2025", "MoSPI_visit": "V1", "MoSPI_month": month,
                 "MoSPI_prepared_status": "ready_for_downstream_preparation_only", "MoSPI_state": "01", "MoSPI_sector": "1",
                 "srl": "1", "acws": "11", "gedu_lvl": "07", "ocu_pas": "611", "ind_pas": "01124",
-                "ern_reg": "100", "ern_self": "0", "hr7": "8",
+                "ern_reg": "100", "ern_self": "0", "hr7": "8", "das17": "11", "ind17": "01", "ern17": "0",
             })
     destination = _run(tmp_path, _write_prepared(tmp_path, rows, release="2025", design_period="post_2025"))
     assignment = _assignments(destination)

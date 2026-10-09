@@ -46,8 +46,29 @@ def add_distribution_evidence(
     deviations = (values - result[f"{prefix}peer_median"]).abs()
     result["_absolute_deviation"] = deviations
     result[f"{prefix}mad"] = result.groupby(group_column, sort=False, dropna=False)["_absolute_deviation"].transform("median")
-    average_rank = result.groupby(group_column, sort=False, dropna=False)[value_column].rank(method="average")
-    result[f"{prefix}percentile_position"] = (average_rank - 0.5) / result[f"{prefix}reference_group_size"].astype("float64")
+    ranks = result.groupby(group_column, sort=False, dropna=False)[value_column]
+    average_rank = ranks.rank(method="average")
+    size = result[f"{prefix}reference_group_size"].astype("float64")
+    result[f"{prefix}percentile_position"] = (average_rank - 0.5) / size
+    # Leave-one-out placement (plan S1): the record is compared with the
+    # *other* members of its group, never with itself.
+    below = ranks.rank(method="min") - 1.0
+    equal = ranks.rank(method="max") - below          # includes the record itself
+    above = size - below - equal
+    others = size - 1.0
+    result[f"{prefix}loo_reference_size"] = others.astype("Int64")
+    result[f"{prefix}loo_percentile_position"] = np.where(others > 0, (below + 0.5 * (equal - 1.0)) / others.where(others > 0, 1.0), np.nan)
+    # Finite-sample (conformal) tail probabilities against the other members:
+    # P(a comparable record is at least this high) = (#others >= x + 1) / (n_others + 1).
+    # Under exchangeability with its peers a clean record has P(p <= a) <= a,
+    # so the value is a calibrated tail probability, not a within-run rank.
+    # The smallest attainable value is 1/n, so a small group can never
+    # produce overwhelming evidence (plan S2).
+    result[f"{prefix}upper_tail_p"] = (above + equal) / size
+    result[f"{prefix}lower_tail_p"] = (below + equal) / size
+    result[f"{prefix}two_sided_tail_p"] = np.minimum(1.0, 2.0 * np.minimum(result[f"{prefix}upper_tail_p"], result[f"{prefix}lower_tail_p"]))
+    result[f"{prefix}tail_direction"] = np.where(result[f"{prefix}upper_tail_p"] < result[f"{prefix}lower_tail_p"], "HIGH",
+                                                 np.where(result[f"{prefix}upper_tail_p"] > result[f"{prefix}lower_tail_p"], "LOW", "CENTRE"))
     result[f"{prefix}signed_distance_from_median"] = values - result[f"{prefix}peer_median"]
     result[f"{prefix}absolute_distance_from_median"] = deviations
     zero_mad = result[f"{prefix}mad"].eq(0)

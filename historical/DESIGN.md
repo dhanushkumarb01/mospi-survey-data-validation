@@ -1,5 +1,15 @@
 # Historical evidence layer — design (plfs-historical-v1.1)
 
+## Current method: `plfs-historical-v2.0` (October 2026)
+
+* **Fail-loud inputs** (plan N2/W0.2): every documented column is required; a missing State, sector or period raises instead of producing all-"not assessable" evidence.
+* **Out-of-sample tail probabilities**: `(#reference ≥ x + 1)/(n + 1)` against strictly earlier periods (`two_sided_tail_p`); feeds the value lane.
+* **Same-season comparison** (W3.2): pre-2025 Q5/Q6 of calendar 2024 are also compared with Jul–Sep / Oct–Dec 2023 (`same_season_*`), shown beside the rolling window. 2025 has no same month one year earlier inside its design (needs 2026 data).
+* **Casual daily wage** added (W3.4).
+* **Frozen reference snapshot** (W3.1): `reference_snapshot.parquet` holds every value the run compared against, with a content hash in the metadata.
+* **Area indicators** (W3.6): design-based standard errors (Taylor linearisation, FSU as PSU within strata; median by Woodruff), design effect, change over design SE, same-season change, earnings distribution drift (Jensen–Shannon), and an HSD-maintained known-events calendar (`known_events.yaml`, empty). Not evaluated (power, false-notable rate).
+* No CPI deflation: no deflator has been approved (W3.3 requires HSD approval).
+
 ## Why
 
 The project brief identifies the gap directly: supervisors have "no mechanism … to use the past data or related survey data for checking anomalies". Every other MoSPI layer compares a record only with its own survey round. This layer adds two kinds of past-data evidence without inventing longitudinal identity.

@@ -1,0 +1,16 @@
+# Known events affecting PLFS area indicators (HSD-maintained).
+#
+# A change in an area indicator that coincides with a listed event is shown
+# as "expected (known event)" instead of being screened as unusual.  The list
+# is intentionally empty: no event is assumed without HSD confirmation.
+#
+# Entry format:
+#   - id: E2024_MIN_WAGE_REVISION_XX
+#     design_period: pre_2025          # or post_2025
+#     period_index: 5                  # quarter/month index on the design axis
+#     state: "09"                      # optional; omit for all States/UTs
+#     indicators: [median_salaried_earnings]
+#     description: Notified revision of minimum wages.
+#     source: Gazette notification no. ...
+#     approved_by: <HSD officer>
+events: []

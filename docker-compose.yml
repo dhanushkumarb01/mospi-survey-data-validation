@@ -19,6 +19,10 @@ x-build: &build
   # Optional CA of a TLS-inspecting proxy/antivirus on the build machine
   # (MOSPI_EXTRA_CA_FILE); used only while pip downloads packages.
   secrets: [extra_ca]
+  # Code version baked into the image (shown by /healthz) so a stale image is detectable:
+  #   MOSPI_CODE_VERSION=$(git rev-parse --short=12 HEAD) docker compose build
+  args:
+    MOSPI_CODE_VERSION: ${MOSPI_CODE_VERSION:-unknown}
 
 x-hardening: &hardening
   user: "10001:10001"

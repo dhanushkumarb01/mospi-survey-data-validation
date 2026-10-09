@@ -1,5 +1,7 @@
 # Final evaluation against the MoSPI problem statement
 
+> **Historical document (5.5/10 baseline).** It evaluates the V2.0 priority construction (risk × influence), which has since been replaced in place by the lane design described in `fusion/DESIGN.md`. Its findings are the starting point of `docs/10_10_IMPROVEMENT_PLAN.md`; current status is recorded at the top of that plan.
+
 **Subject:** the PLFS survey data validation platform in this repository (internal working name "MoSPI"; presented to users as the MoSPI survey data validation platform).
 **Primary source of truth:** *A brief note from HSD, NSO, MoSPI — Design and Development of an Intelligent Survey Data Validation Platform using Probabilistic and Machine Learning Techniques* ("the brief").
 **Secondary:** *Intelligent Survey Data Validation Platform — Research & Technical Documentation v1.0* ("the research document"). It elaborates the brief but is not the problem statement. Where it adds requirements, they are reported separately and never counted as requirements of the brief.

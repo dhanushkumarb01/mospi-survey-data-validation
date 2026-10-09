@@ -1,0 +1,120 @@
+# PLFS Schedule 10.4 household-level integrity rules (existential,
+# referential, arithmetic and temporal).  See plfs_person_rules.yaml for the
+# metadata contract.  "Dry run" counts are violations on the stored, released
+# first-visit data (2023-24 / 2024 / 2025) when the rule was transcribed.
+version: plfs-household-rules-v1.0
+rules:
+  # Existential.  Dry run: 0 / 0 / 0 households.
+  - id: H01_ONE_HEAD_PER_HOUSEHOLD
+    version: 1
+    type: exists_exactly
+    level: household
+    field: heads
+    equals: 1
+    severity: error
+    message: The household does not list exactly one head (relation to head = 1).
+    source: "Schedule 10.4 Block 4 col. (4) relation to head: self-1"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, household: {household_key: "h"}, persons: [{relation: "2"}, {relation: "5"}]}
+      - {expect: violation, household: {household_key: "h"}, persons: [{relation: "1"}, {relation: "1"}]}
+      - {expect: pass, household: {household_key: "h"}, persons: [{relation: "1"}, {relation: "2"}]}
+
+  # Existential / referential.  Dry run: 0 / 0 / 0 households.
+  - id: H02_HOUSEHOLD_SIZE_EQUALS_PERSONS_LISTED
+    version: 1
+    type: count_matches
+    level: household
+    field: persons_listed
+    target: household_size
+    severity: error
+    message: Household size in Block 3 differs from the number of persons listed in Block 4.
+    source: "Schedule 10.4 Block 3 item 1 (household size) and Block 4 (members listed)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, household: {household_key: "h", household_size: "3"}, persons: [{relation: "1"}, {relation: "2"}]}
+      - {expect: pass, household: {household_key: "h", household_size: "2"}, persons: [{relation: "1"}, {relation: "2"}]}
+
+  # Arithmetic.  Dry run: 0 / 0 / 0 households (exact to the rupee).
+  - id: H03_MONTHLY_CONSUMER_EXPENDITURE_IDENTITY
+    version: 1
+    type: arithmetic
+    level: household
+    target: mpce_total
+    terms:
+      - {field: mpce_a}
+      - {field: mpce_b}
+      - {field: mpce_c}
+      - {field: mpce_d, factor: 0.0833333333333333}
+      - {field: mpce_e, factor: 0.0833333333333333}
+    tolerance: 1
+    severity: error
+    message: Usual monthly consumer expenditure (item 5.6) differs from A + B + C + (D + E)/12.
+    source: "Schedule 10.4 Block 3 item 5.6: usual monthly household consumer expenditure [A + B + C + (D+E)/12]"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, household: {mpce_total: "9000", mpce_a: "6000", mpce_b: "1000", mpce_c: "0", mpce_d: "6000", mpce_e: "6000"}}
+      - {expect: pass, household: {mpce_total: "8000", mpce_a: "6000", mpce_b: "1000", mpce_c: "0", mpce_d: "6000", mpce_e: "6000"}}
+
+  # Arithmetic (2025 schedule only).  Dry run: 0 of 270,472 households.
+  - id: H04_MONTHLY_INCOME_TOTAL
+    version: 1
+    type: arithmetic
+    level: household
+    target: income_total
+    terms:
+      - {field: income_rent}
+      - {field: income_interest}
+      - {field: income_pension}
+      - {field: income_remittance}
+    tolerance: 0
+    severity: error
+    message: Total usual monthly income (item 7.5) differs from the sum of items 7.1 to 7.4.
+    source: "Schedule 10.4 (2025) Block 3 item 7.5: total of items 7.1 to 7.4"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, household: {income_total: "5000", income_rent: "1000", income_interest: "0", income_pension: "2000", income_remittance: "0"}}
+      - {expect: pass, household: {income_total: "3000", income_rent: "1000", income_interest: "0", income_pension: "2000", income_remittance: "0"}}
+
+  # Referential: (State/UT, district) must be in the supplied district code list.
+  # Dry run: 2025 0 of 270,472.  Pre-2025 the only supplied list (sheet
+  # "2021-22-23") predates newly created districts: 54 (State, district) pairs
+  # used in 2024 (4,528 households) are absent from it, so the rule is limited
+  # to the 2025 design until HSD supplies the list in force for 2023-24/2024.
+  - id: H05_DISTRICT_CODE_IN_STATE
+    version: 1
+    type: references
+    level: household
+    design_periods: [post_2025]
+    fields: [state, district]
+    widths: [2, 2]
+    code_list: district_codes
+    severity: error
+    message: The district code is not a district of the recorded State/UT in the supplied code list.
+    source: "Supplied district code lists (2023-June2024 and Jan-Dec2024 District_codes_PLFS_Panel_4; Post2025 Indian_Districts_CodeName)"
+    owner: HSD
+    approval_status: approved
+    tests:
+      - {expect: violation, household: {state: "07", district: "99"}, context: {district_codes: [["07", "01"], ["07", "02"]]}}
+      - {expect: pass, household: {state: "07", district: "01"}, context: {district_codes: [["07", "01"], ["07", "02"]]}}
+
+  # Temporal.  Dry run (2024): 64 of 101,957 households interviewed outside
+  # their quarter's months (2025: 0).  Soft until HSD confirms the convention
+  # for late or early interviews.
+  - id: S02_SURVEY_DATE_WITHIN_PERIOD
+    version: 1
+    type: within_period
+    level: household
+    field: survey_date
+    severity: warning
+    message: The household was interviewed outside the months of its survey quarter/month.
+    source: "Schedule 10.4 Block 2 item 2(i) date of survey; quarter/month of the sample (Block 1)"
+    owner: Platform team (proposal)
+    approval_status: draft
+    tests:
+      - {expect: violation, household: {survey_date: "15082024", quarter: "Q3"}, context: {release: "2024"}}
+      - {expect: pass, household: {survey_date: "15022024", quarter: "Q3"}, context: {release: "2024"}}

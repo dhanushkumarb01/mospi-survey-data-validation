@@ -1,5 +1,13 @@
 # Statistical Evidence Layer — V1 design
 
+## Current method: `plfs-statistical-v2.0` (October 2026)
+
+* **Leave-one-out placement** (plan S1): `loo_percentile_position` places a value among the *other* members of its peer group.
+* **Finite-sample tail probabilities** (plan S2): `upper_tail_p = (#others ≥ x + 1)/(n_others + 1)`, `lower_tail_p` likewise, `two_sided_tail_p = min(1, 2·min)`. Under exchangeability with its peers a clean record has P(p ≤ a) ≤ a. The smallest attainable value is ≈ 2/n, so small groups cannot produce overwhelming evidence. These columns feed the value lane; the old `percentile_position` (observation included) is kept for the A0 evaluation baseline and display.
+* **New target** `day7_casual_wage` (Schedule 10.4 Block 6 col. 9, statuses 41/42/51), with applicability governed by the day-7 activity status.
+* Peer groups are now quarter-first pre-2025 (spec v1.1), so the reference is seasonal where support allows.
+* Current-round errors can still contaminate the reference (the historical lane is the uncontaminated counterpart). Not evaluated.
+
 ## Purpose and scope
 
 The layer answers one bounded question: **how unusual is an observed approved numerical response within its assigned comparable population?** It emits auditable statistical evidence, never an error/fraud/fabrication/invalidity judgment. It implements robust quantiles, empirical percentile position, MAD-based deviation, a transparent tail-position description, and a separately scoped 2023–24 linked revisit-change comparison.

@@ -17,7 +17,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def write_markdown_report(path: Path, metadata: dict[str, Any], report: dict[str, Any]) -> None:
     lines = [
-        "# PLFS Pattern V1 run report", "",
+        "# PLFS Pattern run report", "",
         f"- Pattern run ID: `{metadata['run_id']}`",
         f"- Release / observation: `{metadata['release']}` / `{metadata['observation']}`",
         f"- Preprocessing run: `{metadata['input_preprocessing_run_id']}`",
@@ -27,7 +27,13 @@ def write_markdown_report(path: Path, metadata: dict[str, Any], report: dict[str
         "|---|---:|---:|---:|",
     ]
     for name, summary in report["components"].items():
-        lines.append(f"| {name} | {summary['rows']:,} | {summary['assessable']:,} | {summary['not_assessable']:,} |")
+        if "rows" in summary:
+            lines.append(f"| {name} | {summary['rows']:,} | {summary['assessable']:,} | {summary['not_assessable']:,} |")
+    fsu = report["components"].get("fsu_summary")
+    if fsu:
+        lines += ["", "## FSU-level alerts (Cauchy combination + Benjamini-Hochberg across FSUs)", "",
+                  f"- FSUs: {fsu['fsus']:,}; assessable: {fsu['assessable']:,}; notable: {fsu['notable_q_lt_threshold']:,} "
+                  f"(of which with a fieldwork signal: {fsu['notable_with_fieldwork_signal']:,})"]
     lines += ["", "## Interpretation boundary", "",
               "These are group-, FSU-, stratum-, or time-pattern evidence outputs for human review. They do not identify errors, fabrication, an enumerator, or a record requiring correction. No score is an error probability.",
               "", "## Warnings", ""]

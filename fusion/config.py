@@ -1,46 +1,59 @@
-"""Versioned, deliberately transparent fusion parameters (V2).
+"""Versioned, deliberately transparent fusion parameters.
 
-PROVISIONAL: every number here is an engineering setting.  None has been
-learned from confirmed PLFS errors; the controlled injection study
-(evaluation/) measures how they behave, it does not make them "optimal".
+v2.1 ("lanes") replaces the V2.0 average-of-ranks x influence priority, whose
+measured failure is documented in docs/10_10_IMPROVEMENT_PLAN.md §5.7.  There
+are no source weights, no override and no rank bands any more.
+
+v2.2 (9 Oct 2026): discrete-test (Tarone) multiplicity in the value lane, see
+fusion/lanes.py.  Measured reason: the v2.1 runs on 2024 and 2025 flagged 0.51
+and 0.52 of the nominal rate because small current-peer groups cannot reach
+the threshold yet were counted in the Sidak correction.
+
+PROVISIONAL: the review budget and lane shares are defaults until HSD supplies
+supervisor capacity (plan §20, open question 6).  None of these numbers has
+been learned from confirmed PLFS errors; the evaluation stage (§12) measures
+how they behave.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-RECORD_SOURCES = ("statistical", "contextual", "ml", "historical")
+VALUE_VARIABLES = ("cws_earnings_salaried", "cws_earnings_self_employed", "day7_total_hours", "day7_casual_wage")
+FUSION_VERSION = "MoSPI-fusion-v2.2-lanes"
 
 
 @dataclass(frozen=True)
 class FusionParameters:
-    """Engineering settings, not learned PLFS error-model parameters."""
+    """Queue settings (engineering defaults, documented and recorded with every run)."""
 
-    # Record-level evidence only.  FSU (Pattern) evidence describes a group and
-    # is deliberately NOT part of an individual record's risk (audit H3).
-    source_weights: dict[str, float] = field(
-        default_factory=lambda: {"statistical": 0.30, "contextual": 0.20, "ml": 0.25, "historical": 0.25}
-    )
-    # A record-level percentile rank at or above this sets risk to at least
-    # that rank, so one exceptional source is not diluted by ordinary ones.
-    override_rank_threshold: float = 0.995
-    priority_bands: tuple[tuple[str, float], ...] = (
-        ("CRITICAL", 0.80),
-        ("HIGH", 0.50),
-        ("MEDIUM", 0.20),
-        ("LOW", 0.00),
-    )
-    # FSU group alerts: Benjamini-Hochberg q-value of the strongest FSU check.
-    group_bands: tuple[tuple[str, float], ...] = (("HIGH", 0.01), ("MEDIUM", 0.05))
-    calibration_version: str = "percentile-midrank-v2-zero-deviation-is-no-evidence"
-    fusion_version: str = "MoSPI-fusion-v2.0"
-    influence_version: str = "selective-editing-local-score-v2-provisional"
+    # Share of a batch's records that supervisors can review ("Check now").
+    # Default 1% until HSD supplies capacity (cases per supervisor-day x days / records).
+    review_budget_share: float = 0.01
+    # Share of that budget reserved for occupation coding checks (plan §8.3: 10%).
+    coding_budget_share: float = 0.10
+    # At most this many value checks per FSU in "Check now"; the rest go to "Check if time".
+    per_fsu_cap: int = 10
+    # "Check if time": evidence up to this multiple of the threshold, up to this multiple of the budget.
+    tier_b_factor: float = 5.0
+    tier_b_multiplier: float = 2.0
+    # FSU group alerts: FSU-level q-value (Cauchy combination + BH across FSUs).
+    group_alert_q: float = 0.05
+    group_strong_q: float = 0.01
+    # Use the expected-value (conditional) models as a value-check mechanism.
+    use_conditional_model: bool = True
+    # Leave mechanisms/variables that cannot attain the value threshold out of the Sidak count (Tarone 1990).
+    # False reproduces fusion v2.1.
+    discrete_test_correction: bool = True
     evidence_card_capacity: int = 10_000
+    fusion_version: str = FUSION_VERSION
+    calibration_version: str = "finite-sample-tail-probabilities-v2 (LOO peers, out-of-sample history, State-conditional split-conformal model; Tarone count)"
+    impact_version: str = "delta-domain-mean-over-design-se-v1"
 
     def __post_init__(self) -> None:
-        if set(self.source_weights) != set(RECORD_SOURCES) or any(v < 0 for v in self.source_weights.values()):
-            raise ValueError(f"Fusion weights must be non-negative and name each record-level source: {RECORD_SOURCES}.")
-        if sum(self.source_weights.values()) <= 0:
-            raise ValueError("At least one fusion weight must be positive.")
-        if not 0 < self.override_rank_threshold <= 1:
-            raise ValueError("override_rank_threshold must be in (0, 1].")
+        if not 0 < self.review_budget_share < 1:
+            raise ValueError("review_budget_share must be in (0, 1).")
+        if not 0 <= self.coding_budget_share < 1:
+            raise ValueError("coding_budget_share must be in [0, 1).")
+        if self.per_fsu_cap < 0 or self.tier_b_factor < 1 or self.tier_b_multiplier < 0:
+            raise ValueError("per_fsu_cap must be >= 0, tier_b_factor >= 1 and tier_b_multiplier >= 0.")

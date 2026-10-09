@@ -12,9 +12,13 @@ from typing import Iterable
 
 import pandas as pd
 
+from survey_rules.schema import read_parquet
+
 from .config import (
     DEFAULT_SPECIFICATIONS,
     PEER_GROUP_SPECIFICATION_VERSION,
+    derive_context,
+    expanded_levels,
     SOURCE_PROFILES,
     GroupingProfile,
     PeerGroupSpecification,
@@ -51,18 +55,6 @@ class RunConfig:
 
 def _clean_text(values: pd.Series) -> pd.Series:
     return values.astype("string").fillna("").str.strip()
-
-
-def _major_occupation(values: pd.Series) -> pd.Series:
-    """Coarsen supplied three-digit occupation codes to their major group."""
-    clean = _clean_text(values)
-    return clean.where(clean.str.fullmatch(r"\d{3}"), "").str.slice(0, 1).astype("string")
-
-
-def _industry_division(values: pd.Series) -> pd.Series:
-    """Coarsen supplied NIC industry codes to their first two digits."""
-    clean = _clean_text(values)
-    return clean.where(clean.str.fullmatch(r"\d{4,5}"), "").str.slice(0, 2).astype("string")
 
 
 def _canonical_json(value: object) -> str:
@@ -136,8 +128,10 @@ class PeerGroupEngine:
         }
         if source.release == "2025":
             required.add("MoSPI_month")
+        else:
+            required.add("MoSPI_quarter")  # pre-2025 seasonal boundary (spec v1.1)
         try:
-            frame = pd.read_parquet(self.config.prepared_person_path, columns=sorted(required))
+            frame = read_parquet(self.config.prepared_person_path, columns=sorted(required))
         except Exception as error:  # pandas exposes backend-specific exceptions.
             raise PeerGroupFailure(f"Could not read required prepared-person columns: {error}") from error
         absent = required - set(frame.columns)
@@ -153,18 +147,8 @@ class PeerGroupEngine:
                 raise PeerGroupFailure(f"Prepared input has unexpected or mixed {field}: {sorted(values)}")
 
     @staticmethod
-    def _context(frame: pd.DataFrame, source: SourceProfile) -> pd.DataFrame:
-        context = pd.DataFrame(index=frame.index)
-        context["state"] = _clean_text(frame["MoSPI_state"])
-        context["sector"] = _clean_text(frame["MoSPI_sector"])
-        context["cws_status"] = _clean_text(frame[source.context_columns["cws_status"]])
-        if "education" in source.context_columns:
-            context["education"] = _clean_text(frame[source.context_columns["education"]])
-        if "occupation_major_group" in source.context_columns:
-            context["occupation_major_group"] = _major_occupation(frame[source.context_columns["occupation_major_group"]])
-        if "industry_division" in source.context_columns:
-            context["industry_division"] = _industry_division(frame[source.context_columns["industry_division"]])
-        return context
+    def _context(frame: pd.DataFrame, source: SourceProfile, design_period: str) -> pd.DataFrame:
+        return derive_context(frame, source, design_period=design_period)
 
     @staticmethod
     def _boundaries(frame: pd.DataFrame, respect_month: bool) -> pd.DataFrame:
@@ -233,14 +217,15 @@ class PeerGroupEngine:
         common.loc[ready & ~target_valid, "not_assessable_reason"] = "TARGET_VALUE_MISSING_OR_INVALID"
         common.loc[ready & target_valid, "not_assessable_reason"] = "NO_CONFIGURED_GROUP_MEETS_MINIMUM"
 
-        context = self._context(frame, source)
+        design_period = str(metadata["design_period"])
+        context = self._context(frame, source, design_period)
         boundaries = self._boundaries(frame, specification.respect_post_2025_month)
         base = pd.concat([boundaries, context], axis=1)
         eligible = ready & target_valid
         references: list[pd.DataFrame] = []
         assigned = pd.Series(False, index=frame.index)
 
-        for level_number, dimensions in enumerate(profile.levels):
+        for level_number, dimensions in enumerate(expanded_levels(specification, profile, design_period)):
             unavailable = [dimension for dimension in dimensions if dimension not in base.columns]
             if unavailable:
                 LOGGER.warning("Skipping unavailable configured level for %s: %s", target, unavailable)

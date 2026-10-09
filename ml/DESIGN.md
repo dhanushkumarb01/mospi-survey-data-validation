@@ -1,5 +1,12 @@
 # PLFS V1 ML validation design
 
+## Current method: `plfs-ml-v2.0` (October 2026) — ML must earn its place
+
+* **Expected-value (conditional) models** are the only ML in the decision path. For a record of period p, the model is trained only on strictly earlier periods of the same design period (brief Feature 2), for four targets: salaried earnings, self-employment earnings, day-7 casual wage (log scale) and day-7 hours. 20% of training FSUs are held out to give split-conformal tail probabilities (`model_tail_p`) and a usual range for similar people. The first period of a design falls back to the in-round FSU-grouped cross-fit and says so. Every fit is listed in `model_registry.json` (training periods, rows, seed, iterations, residual quantiles).
+* **Isolation Forest and LOF** are research outputs only (`decision_path = RESEARCH_ONLY`): alone they found 1.5%/4.0% and 23.3%/26.3% of errors in the top 1% and LOF was redundant with the statistical layer. Fusion does not read them.
+* **Exact-signature similarity** is informational; near-duplicate households are now an FSU-level pattern check.
+* Whether the expected-value model adds evidence beyond the references is criterion 3 of `evaluation/PROTOCOL.md`; it has not been run.
+
 ## Purpose and boundary
 
 This layer produces four separate forms of anomaly evidence from one prepared PLFS person delivery. It is not an editing, classification, prioritisation, fraud-detection, or error-probability system. It never changes source values and never says that an observation is wrong.

@@ -13,8 +13,9 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from peer_groups.config import SOURCE_PROFILES
-from survey_rules import APPLICABLE, applicability_series
+from peer_groups.config import SOURCE_PROFILES, derive_context
+from survey_rules import APPLICABLE, applicability_series, status_concept
+from survey_rules.schema import read_parquet
 
 from .config import APPROVED_TARGETS, STATISTICAL_METHOD_VERSION, StatisticalParameters
 from .reporting import utc_now, write_json, write_markdown_report
@@ -97,7 +98,9 @@ class StatisticalEngine:
         }
         if source.release == "2025":
             columns.add("MoSPI_month")
-        frame = pd.read_parquet(self.config.prepared_person_path, columns=sorted(columns))
+        else:
+            columns.add("MoSPI_quarter")
+        frame = read_parquet(self.config.prepared_person_path, columns=sorted(columns))
         result = pd.DataFrame({"source_observation_id": _source_ids(frame, source.person_serial_column)})
         if result["source_observation_id"].duplicated().any():
             raise StatisticalFailure("Prepared input cannot provide unique source observation identifiers")
@@ -114,17 +117,9 @@ class StatisticalEngine:
         result["design_period"] = _clean(frame["MoSPI_design_period"])
         result["visit"] = _clean(frame["MoSPI_visit"])
         result["month"] = _clean(frame["MoSPI_month"]) if "MoSPI_month" in frame else ""
-        result["state"] = _clean(frame["MoSPI_state"])
-        result["sector"] = _clean(frame["MoSPI_sector"])
-        result["cws_status"] = _clean(frame[source.context_columns["cws_status"]])
-        if "education" in source.context_columns:
-            result["education"] = _clean(frame[source.context_columns["education"]])
-        if "occupation_major_group" in source.context_columns:
-            occupation = _clean(frame[source.context_columns["occupation_major_group"]])
-            result["occupation_major_group"] = occupation.where(occupation.str.fullmatch(r"\d{3}"), "").str.slice(0, 1)
-        if "industry_division" in source.context_columns:
-            industry = _clean(frame[source.context_columns["industry_division"]])
-            result["industry_division"] = industry.where(industry.str.fullmatch(r"\d{4,5}"), "").str.slice(0, 2)
+        context = derive_context(frame, source, design_period=str(result["design_period"].iloc[0]) if len(result) else None)
+        for column in context.columns:
+            result[column] = context[column].to_numpy()
         result["_prepared_ready"] = _clean(frame["MoSPI_prepared_status"]).eq("ready_for_downstream_preparation_only")
         return result
 
@@ -134,7 +129,7 @@ class StatisticalEngine:
             "reference_run_id", "input_preprocessing_run_id", "specification_version", "minimum_group_size", "peer_group_id", "peer_group_size",
             "grouping_profile", "grouping_dimensions", "grouping_values", "backoff_level", "assessability_status", "not_assessable_reason",
         ]
-        return pd.read_parquet(self.config.peer_group_run_path / "peer_group_assignments.parquet", columns=columns, filters=[("target_variable", "=", target)])
+        return read_parquet(self.config.peer_group_run_path / "peer_group_assignments.parquet", columns=columns, filters=[("target_variable", "=", target)])
 
     def _references_for(self, assignments: pd.DataFrame, target: str) -> pd.DataFrame:
         references = pd.read_parquet(self.config.peer_group_run_path / "peer_group_references.parquet", columns=["peer_group_id", "target_variable"])
@@ -201,13 +196,17 @@ class StatisticalEngine:
         return result
 
     def _build_target(self, assignments: pd.DataFrame, source_values: pd.DataFrame, references: pd.DataFrame, target: str) -> tuple[pd.DataFrame, dict[str, object]]:
-        output = assignments.merge(source_values[["source_observation_id", f"{target}__raw", f"{target}__value", "cws_status"]], on="source_observation_id", how="left", validate="one_to_one")
+        governing = status_concept(target)
+        status = source_values[governing] if governing in source_values else pd.Series("", index=source_values.index, dtype="string")
+        lookup = source_values[["source_observation_id", f"{target}__raw", f"{target}__value"]].assign(_status=status.to_numpy())
+        output = assignments.merge(lookup, on="source_observation_id", how="left", validate="one_to_one")
         output.rename(columns={f"{target}__raw": "observed_value_raw", f"{target}__value": "observed_value"}, inplace=True)
         # PLFS questionnaire applicability (survey_rules.plfs): a 0 stored for a
         # person whose activity status does not route to this item is a
-        # placeholder, not a reported value, and carries no evidence.
-        output["target_applicability"] = applicability_series(target, output["cws_status"]).to_numpy()
-        output.drop(columns="cws_status", inplace=True)
+        # placeholder, not a reported value, and carries no evidence.  The
+        # governing status is the CWS, or the day-7 activity status for wages.
+        output["target_applicability"] = applicability_series(target, output["_status"]).to_numpy()
+        output.drop(columns="_status", inplace=True)
         output["statistical_assessability_status"] = "NOT_ASSESSABLE"
         output["statistical_assessability_reason"] = "PEER_" + output["not_assessable_reason"].fillna("NOT_ASSESSABLE").astype("string")
         peer_ready = output["assessability_status"].eq("ASSESSABLE") & output["peer_group_id"].notna()
@@ -219,7 +218,7 @@ class StatisticalEngine:
         output.loc[eligible, "statistical_assessability_status"] = "ASSESSABLE"
         output.loc[eligible, "statistical_assessability_reason"] = pd.NA
         output["statistical_method_version"] = STATISTICAL_METHOD_VERSION
-        output["percentile_convention"] = "EMPIRICAL_MIDRANK_INCLUDING_OBSERVATION"
+        output["percentile_convention"] = "EMPIRICAL_MIDRANK_INCLUDING_OBSERVATION; loo_percentile_position and tail probabilities EXCLUDE the observation"
         output["quantile_convention"] = "LINEAR_INTERPOLATION"
         requested = output.loc[eligible, ["source_observation_id", "peer_group_id"]].copy()
         evidence = self._reference_evidence(source_values, references, requested, target) if not requested.empty else pd.DataFrame()
@@ -228,14 +227,17 @@ class StatisticalEngine:
         lower, upper = self.config.parameters.lower_tail_quantile, self.config.parameters.upper_tail_quantile
         schema_fields = ["computed_peer_group_size", *[f"quantile_{str(q).replace('.', '_')}" for q in (lower, .25, .5, .75, upper)],
                          "peer_median", "mad", "percentile_position", "signed_distance_from_median", "absolute_distance_from_median",
-                         "robust_deviation", "robust_deviation_status", "distribution_position", "lower_tail_percentile_distance", "upper_tail_percentile_distance"]
+                         "robust_deviation", "robust_deviation_status", "distribution_position", "lower_tail_percentile_distance", "upper_tail_percentile_distance",
+                         "loo_reference_size", "loo_percentile_position", "upper_tail_p", "lower_tail_p", "two_sided_tail_p", "tail_direction"]
+        text_fields = {"robust_deviation_status", "distribution_position", "tail_direction"}
         for field in schema_fields:
-            output[field] = pd.Series(pd.NA, index=output.index, dtype="string") if field in {"robust_deviation_status", "distribution_position"} else np.nan
+            output[field] = pd.Series(pd.NA, index=output.index, dtype="string") if field in text_fields else np.nan
         if not evidence.empty:
             fields = [
                 "computed_peer_group_size", "quantile_0_05", "quantile_0_25", "quantile_0_5", "quantile_0_75", "quantile_0_95",
                 "peer_median", "mad", "percentile_position", "signed_distance_from_median", "absolute_distance_from_median",
                 "robust_deviation", "robust_deviation_status", "distribution_position", "lower_tail_percentile_distance", "upper_tail_percentile_distance",
+                "loo_reference_size", "loo_percentile_position", "upper_tail_p", "lower_tail_p", "two_sided_tail_p", "tail_direction",
             ]
             # Quantile field names are parameter-derived, so keep the common schema explicit for V1 defaults and generic otherwise.
             fields = [field for field in evidence.columns if field in fields or field.startswith("quantile_")]
@@ -245,9 +247,9 @@ class StatisticalEngine:
                 output[field] = evidence_by_observation[field].reindex(output_keys).to_numpy()
         output.replace([np.inf, -np.inf], np.nan, inplace=True)
         for field in schema_fields:
-            output[field] = output[field].astype("string") if field in {"robust_deviation_status", "distribution_position"} else pd.to_numeric(output[field], errors="coerce").astype("float64")
+            output[field] = output[field].astype("string") if field in text_fields else pd.to_numeric(output[field], errors="coerce").astype("float64")
         assessed = output["statistical_assessability_status"].eq("ASSESSABLE")
-        required = ["observed_value", "peer_median", "mad", "percentile_position"]
+        required = ["observed_value", "peer_median", "mad", "percentile_position", "two_sided_tail_p"]
         if assessed.any() and not np.isfinite(output.loc[assessed, required].to_numpy(dtype=float)).all():
             raise StatisticalFailure(f"Non-finite required statistical evidence for {target}")
         summary = {
