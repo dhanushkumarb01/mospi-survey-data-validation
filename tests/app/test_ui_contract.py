@@ -23,8 +23,11 @@ def test_primary_navigation_is_a_plain_dashboard():
         assert label in nav
     assert "Powered by <b>INNODATATICS</b>" in html and "MoSPI" in html
     css = (ROOT / "ui" / "styles.css").read_text(encoding="utf-8")
-    assert "@font-face" not in css and "animation" not in css and "@keyframes" not in css     # plain government dashboard
-    # one restrained navy-to-indigo blend on a few surfaces only; no radial/conic effects or decorative washes
+    # V2.3 redesign: short purposeful motion is allowed, but only with a reduced-motion opt-out; fonts and assets stay local.
+    assert "@font-face" not in css and "@import" not in css and "http" not in css     # system fonts, nothing fetched
+    assert "prefers-reduced-motion" in css     # every transition and animation can be switched off
+    assert "<script src=\"http" not in html and "<link rel=\"stylesheet\" href=\"http" not in html     # no CDN
+    # no radial/conic effects or decorative washes
     assert css.count("gradient") <= 5 and "radial-gradient" not in css and "conic-gradient" not in css
     assert "backdrop-filter" not in css     # no glass effects
 
