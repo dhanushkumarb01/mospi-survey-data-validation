@@ -1,5 +1,6 @@
-# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md).  Docker and local installs use requirements.txt,
-# which must list the same pins (checked by tests/app/test_deployment.py).
+# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md): the hosted, review-only serving set.  Docker and local
+# installs use requirements.txt (the full pipeline).  Every pin here must equal the one in requirements.txt, and the
+# packages the hosted path never imports (scikit-learn, uvicorn) are left out (checked by tests/app/test_deployment.py).
 [project]
 name = "mospi-survey-data-validation"
 version = "2.2.0"
@@ -11,13 +12,11 @@ dependencies = [
     "numpy==1.26.4",
     "pyarrow==24.0.0",
     "scipy==1.15.3",
-    "scikit-learn==1.4.2",
     "duckdb==1.5.5",
     "PyYAML==6.0.3",
     "fastapi==0.141.1",
     "starlette==1.6.0",
     "pydantic==2.12.4",
-    "uvicorn==0.52.1",
     "psycopg[binary]==3.2.3",
 ]
 

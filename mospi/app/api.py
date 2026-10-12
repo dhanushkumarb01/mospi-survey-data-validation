@@ -26,11 +26,13 @@ import io
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterator
+import logging
+from typing import Any, Callable, Iterator
 
 import duckdb
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -70,6 +72,11 @@ REVIEW_ONLY_REASON = ("This instance is review-only. Validation batches are run 
 AUDIT_READ_ONLY_REASON = ("This instance has no durable audit store, so decisions cannot be recorded here, and CSV exports (which are "
                           "logged in the audit trail) are not offered. Recorded decisions and audit history are shown read-only.")
 NO_USERS_REASON = "Sign-in is required on this deployment, but no users are configured (MOSPI_USERS_JSON). No data is served until they are."
+DATABASE_DOWN_REASON = ("The review database cannot be reached just now, so this page cannot be shown and nothing was changed. "
+                        "Please try again in a minute; if it keeps happening, tell the administrator.")
+# Routes that describe the instance itself and need no review data.
+NO_DATA_ROUTES = {"/api/session", "/api/session/required", "/api/deployment", "/api/labels", "/api/version"}
+LOG = logging.getLogger("MoSPI.api")
 
 
 def _columns(path: Path) -> set[str]:
@@ -190,7 +197,12 @@ def env_flag(name: str) -> bool:
 
 def create_app(fusion_root: Path | None = None, project_root: Path | None = None, users_file: Path | None = None,
                batch_datasets: dict[str, dict[str, Any]] | None = None, *, users_json: str | None = None, review_only: bool = False,
-               audit_read_only: bool = False, require_authentication: bool = False, audit_store: Any = None, operations: Any = None) -> FastAPI:
+               audit_read_only: bool = False, require_authentication: bool = False, audit_store: Any = None, operations: Any = None,
+               before_data: Callable[[], None] | None = None, health_check: Callable[[], tuple[dict[str, Any], int]] | None = None,
+               hosted: bool = False) -> FastAPI:
+    """``before_data`` runs after authentication and before any data route (the hosted instance fetches its review data
+    from the database there, so an unauthenticated request never causes a download); ``health_check`` replaces the
+    file-based /healthz; ``hosted`` keeps database error details out of responses (they are logged instead)."""
     app = FastAPI(title="MoSPI Survey Data Validation", docs_url=None, redoc_url=None, openapi_url=None)
     fusion_root = Path(fusion_root) if fusion_root is not None else data_root() / "fusion" / "runs"
     audit = audit_store or SqliteAuditStore()
@@ -210,10 +222,17 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
         manifest = {}
     data_notice = manifest.get("notice") if manifest.get("synthetic") else None
 
+    def database_down(error: Exception) -> JSONResponse:
+        # No silent fallback: nothing is written elsewhere, and the message never carries credentials.  The hosted
+        # instance gives the plain message only (host names and driver errors go to the log).
+        if hosted:
+            LOG.error("Database unavailable: %s", error)
+            return JSONResponse({"detail": DATABASE_DOWN_REASON, "database_unavailable": True}, status_code=503)
+        return JSONResponse({"detail": f"The operational database is unavailable, so this request was not completed. {error}"}, status_code=503)
+
     @app.exception_handler(DatabaseUnavailable)
     async def database_unavailable(request: Request, error: DatabaseUnavailable) -> JSONResponse:
-        # No silent fallback: nothing is written elsewhere, and the message never carries credentials.
-        return JSONResponse({"detail": f"The operational database is unavailable, so this request was not completed. {error}"}, status_code=503)
+        return database_down(error)
 
     @app.middleware("http")
     async def security(request: Request, call_next):
@@ -233,6 +252,15 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
                 return JSONResponse({"detail": "Only an administrator can start a batch validation."}, status_code=403)
         if review_only and request.url.path.startswith("/api/batch") and request.method not in ("GET", "HEAD"):
             return JSONResponse({"detail": REVIEW_ONLY_REASON, "review_only": True}, status_code=403)
+        if before_data is not None and is_api and request.url.path not in NO_DATA_ROUTES:
+            try:
+                await run_in_threadpool(before_data)
+            except DatabaseUnavailable as error:
+                return database_down(error)
+            except Exception as error:   # noqa: BLE001 - e.g. a failed checksum: never serve partial data
+                LOG.error("Review data could not be prepared: %s: %s", type(error).__name__, error)
+                return JSONResponse({"detail": "The review data could not be loaded completely, so it is not shown. Please try again in a minute; "
+                                               "if it keeps happening, tell the administrator.", "database_unavailable": True}, status_code=503)
         request.state.user = user
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -772,6 +800,9 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
     @app.get("/healthz", include_in_schema=False)
     def health() -> JSONResponse:
         """Readiness without authentication: reports only whether data and the audit store are usable, never paths or records."""
+        if health_check is not None:
+            body, status_code = health_check()
+            return JSONResponse({**body, "code_version": CODE_VERSION or "not set (MOSPI_CODE_VERSION)", "review_only": review_only}, status_code=status_code)
         try:
             available = repository.runs()
         except (OSError, ValueError):

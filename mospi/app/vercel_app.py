@@ -3,34 +3,36 @@
 Local and Docker serving keep using ``python -m mospi.app.serve``; nothing here changes them.
 
 On Vercel the app is always:
-* review-only - batch validation cannot be started (Vercel Functions cannot run
-  the 23-47 minute batch, and the project directory is read-only);
-* audit read-only - decisions are not recorded, because Vercel offers no durable
-  shared disk and the Python Blob SDK has no conditional (compare-and-swap) write,
-  so concurrent decisions could be lost or fork the hash chain.  Recorded history
-  bundled with the data is shown read-only;
-* sign-in required - every /api request needs a bearer token from
-  ``MOSPI_USERS_JSON``.  The only exception is ``MOSPI_ALLOW_ANONYMOUS_DEMO=1`` on a
-  data directory whose manifest says it is synthetic.
+* review-only - batch validation and uploads cannot be started (Vercel Functions cannot run the batch, and the
+  project directory is read-only);
+* audit read-only - decisions are recorded only on the local instance; the hosted instance reads the review history
+  and the chain verification recorded there;
+* sign-in required - every /api request needs a bearer token from ``MOSPI_USERS_JSON`` (SHA-256 hashes only).
 
-Environment: ``MOSPI_DATA_DIR`` (default ``data/demo``, relative to the project),
-``MOSPI_USERS_JSON``, ``MOSPI_ALLOW_ANONYMOUS_DEMO``, ``MOSPI_CODE_VERSION``.
+Data (``MOSPI_AUDIT_BACKEND=postgres``, the hosted set-up): ``MOSPI_DATABASE_URL`` is the **reader** role on the Supabase
+transaction pooler (``sslmode=verify-full`` with ``MOSPI_DB_CA_FILE=deploy/supabase/prod-ca-2021.crt``).  The review
+records, run registry, chain verification and the review data themselves (the hosted serving set, mospi/db/serving.py)
+are read through the ``hosted_*`` views only.  The serving set is fetched into the function's temporary directory on the
+first authenticated data request of each instance, verified by SHA-256, and reused while the instance lives; the
+unchanged DuckDB queries then serve it.  No review data is bundled with the deployment.
 
-With ``MOSPI_AUDIT_BACKEND=postgres`` and ``MOSPI_DATABASE_URL`` (role ``mospi_reader``, ``sslmode=require`` or
-stricter) the review records, run registry, job status and integrity-check results are read live from the
-processing machine's PostgreSQL through the ``hosted_*`` views only.  Uploads are never available here, and the
-reader role makes the hosted instance read-only at the database as well (docs/deployment/POSTGRESQL.md).
+No silent fallback: if the database is not configured or cannot be reached, every data request answers HTTP 503 with a
+plain-language message, and nothing is served from anywhere else.
 
-With ``MOSPI_AUDIT_BACKEND=gateway`` (the current set-up) the same reader views are read through the signed hosted read
-gateway on the processing machine, over a Cloudflare Tunnel (``MOSPI_GATEWAY_URL``, ``MOSPI_GATEWAY_SECRET``,
-``MOSPI_CF_ACCESS_CLIENT_ID``/``_SECRET``); Vercel then holds no database credential (docs/deployment/CLOUDFLARE_TUNNEL.md).
+Without ``MOSPI_AUDIT_BACKEND=postgres`` the synthetic demonstration bundle (``MOSPI_DATA_DIR``, default ``data/demo``)
+is served as before; it is not uploaded in the Supabase set-up (.vercelignore).
+
+Environment: ``MOSPI_AUDIT_BACKEND``, ``MOSPI_DATABASE_URL``, ``MOSPI_DB_CA_FILE``, ``MOSPI_USERS_JSON``,
+``MOSPI_DB_MAX_CONNECTIONS`` (default 3 here), ``MOSPI_CODE_VERSION``, ``MOSPI_ALLOW_ANONYMOUS_DEMO`` (synthetic bundle only).
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
+from typing import Any
 
 from . import backends
 from .api import _load_users, create_app, env_flag
@@ -51,8 +53,7 @@ def _synthetic(root: Path) -> bool:
         return False
 
 
-def build() -> object:
-    root = _data_root()
+def _users() -> str | None:
     users_json = os.environ.get("MOSPI_USERS_JSON", "").strip() or None
     if users_json:
         try:
@@ -61,16 +62,63 @@ def build() -> object:
             # Never echo the value: it holds token hashes.  Serving continues with every /api call refused.
             log.error("MOSPI_USERS_JSON is not a valid users document; every /api request will be refused until it is fixed.")
             users_json = None
+    return users_json
+
+
+def _not_configured(reason: str):
+    from mospi.db.connection import DatabaseUnavailable
+
+    def refuse() -> None:
+        raise DatabaseUnavailable(reason)
+    return refuse
+
+
+def build_postgres(users_json: str | None) -> object:
+    """Hosted instance reading everything from the database through the reader views."""
+    os.environ.setdefault("MOSPI_DB_MAX_CONNECTIONS", "3")          # serverless: a few connections per instance
+    from mospi.db.connection import DatabaseUnavailable, database_from_env
+    from mospi.db.serving import HostedServingData
+    root = Path(os.environ.get("MOSPI_SERVING_DIR", "").strip() or Path(tempfile.gettempdir()) / "mospi-serving")
+    (root / "fusion" / "runs").mkdir(parents=True, exist_ok=True)
+    try:
+        audit_store, operations = backends.build(root / "fusion" / "runs", root, hosted=True)
+        db = database_from_env(application_name="mospi-hosted", read_only=True)
+    except Exception as error:   # noqa: BLE001 - misconfiguration: refuse data requests plainly, never fall back
+        log.error("Hosted database is not configured correctly (%s).", type(error).__name__)
+        return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True, require_authentication=True,
+                          before_data=_not_configured("The hosted database connection is not configured."), hosted=True,
+                          health_check=lambda: ({"status": "unavailable", "database": {"configured": False}}, 503))
+    serving = HostedServingData(db, root)
+
+    def health() -> tuple[dict[str, Any], int]:
+        try:
+            info = db.ping()
+            version = db.fetchone("SELECT version, migrations FROM hosted_schema_version") or {}
+            database = {"reachable": True, "tls": bool(info.get("ssl")), "schema_version": version.get("version"), "migrations": version.get("migrations")}
+        except DatabaseUnavailable:
+            return {"status": "unavailable", "database": {"reachable": False}, "review_data": serving.status()}, 503
+        return {"status": "ok", "database": database, "review_data": serving.status(), "audit_store": "read-only", "audit_backend": "postgres"}, 200
+
+    return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True, require_authentication=True,
+                      audit_store=audit_store, operations=operations, before_data=serving.ensure, health_check=health, hosted=True)
+
+
+def build() -> object:
+    users_json = _users()
+    try:
+        backend = backends.audit_backend()
+    except backends.BackendError as error:
+        log.error("%s", error)
+        backend = "postgres"                    # an invalid value must not silently serve something else: refuse plainly
+        os.environ["MOSPI_AUDIT_BACKEND"] = "invalid"
+    if backend == "postgres":
+        return build_postgres(users_json)
+    root = _data_root()
     anonymous_demo = env_flag("MOSPI_ALLOW_ANONYMOUS_DEMO") and _synthetic(root)
     if env_flag("MOSPI_ALLOW_ANONYMOUS_DEMO") and not anonymous_demo:
         log.error("MOSPI_ALLOW_ANONYMOUS_DEMO is ignored: the data directory is not marked synthetic.")
-    try:
-        audit_store, operations = backends.build(root / "fusion" / "runs", root, hosted=True)
-    except Exception as error:   # noqa: BLE001 - serve the bundled data read-only rather than fail every request
-        log.error("PostgreSQL reader is not configured correctly (%s); serving bundled review history only.", type(error).__name__)
-        audit_store, operations = None, None
     return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True,
-                      require_authentication=not anonymous_demo, audit_store=audit_store, operations=operations)
+                      require_authentication=not anonymous_demo)
 
 
 app = build()

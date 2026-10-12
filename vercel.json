@@ -1,9 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["icn1"],
   "functions": {
     "mospi/app/vercel_app.py": {
       "maxDuration": 60,
-      "excludeFiles": "{**/tests/**,**/__pycache__/**,docs/**,notebooks/**,data/*/runs/**,data/pipeline/**}"
+      "excludeFiles": "{**/tests/**,**/__pycache__/**,docs/**,notebooks/**,data/**,scripts/**,.env,.env.*}"
     }
   }
 }
