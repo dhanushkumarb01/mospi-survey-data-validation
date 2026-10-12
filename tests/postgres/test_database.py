@@ -28,7 +28,7 @@ DECISION = {"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "rea
 def test_migrations_are_recorded_and_a_second_run_applies_nothing(pg):
     assert apply(pg["admin"]) == []
     state = status(pg["admin"])
-    assert state["pending"] == [] and state["changed"] == [] and len(state["applied"]) == 3
+    assert state["pending"] == [] and state["changed"] == [] and len(state["applied"]) == 4
     pg["admin"].execute("UPDATE schema_migrations SET checksum = 'edited' WHERE version = '0001_audit'")
     with pytest.raises(MigrationError, match="changed after it was applied"):
         apply(pg["admin"])
@@ -66,7 +66,8 @@ def test_finished_jobs_and_published_runs_cannot_be_rewritten(pg):
 def test_connection_errors_never_reveal_the_password(pg):
     from psycopg.conninfo import make_conninfo
     from mospi.db.connection import Database
-    bad = Database(make_conninfo(pg["urls"]["app"], password="wrong-password-123", port="5432"), schema=pg["schema"])
+    # Unreachable rather than a wrong password: Supabase bans an IP address after repeated failed logins.
+    bad = Database(make_conninfo(pg["urls"]["app"], password="wrong-password-123", host="127.0.0.1", port="1"), schema=pg["schema"])
     with pytest.raises(DatabaseUnavailable) as caught:
         bad.ping()
     assert "wrong-password-123" not in str(caught.value) and "wrong-password-123" not in repr(bad)

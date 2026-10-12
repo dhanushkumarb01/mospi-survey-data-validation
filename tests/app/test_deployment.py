@@ -261,15 +261,35 @@ def test_vercel_entrypoint_serves_the_committed_synthetic_demo(tmp_path, monkeyp
     assert not any(demo.rglob("*.sqlite"))
 
 
+def test_vercel_entrypoint_without_a_database_refuses_data_plainly_and_never_falls_back(tmp_path, monkeypatch):
+    users = json.dumps({"users": [{"name": "S", "role": "supervisor", "token_sha256": hashlib.sha256(b"tok").hexdigest()}]})
+    for backend in ("postgres", "gateway"):            # postgres without a URL; a removed backend name
+        monkeypatch.delenv("MOSPI_DATABASE_URL", raising=False)
+        client = _vercel_app(monkeypatch, ROOT / "data" / "demo", MOSPI_AUDIT_BACKEND=backend, MOSPI_USERS_JSON=users,
+                             MOSPI_SERVING_DIR=str(tmp_path / backend))
+        response = client.get("/api/overview", headers={"Authorization": "Bearer tok"})
+        assert response.status_code == 503 and response.json()["database_unavailable"] is True, backend
+        assert client.get("/api/overview").status_code == 401                        # sign-in is still checked first
+        assert client.get("/healthz").status_code == 503
+        assert client.get("/api/session", headers={"Authorization": "Bearer tok"}).status_code == 200
+    monkeypatch.delenv("MOSPI_AUDIT_BACKEND")
+
+
 def test_vercel_packaging_matches_the_docker_dependencies_and_excludes_data():
     pins = sorted(line.strip() for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#"))
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert sorted(re.findall(r'^\s+"([^"]+==[^"]+)",', pyproject, flags=re.M)) == pins
+    hosted = sorted(re.findall(r'^\s+"([^"]+==[^"]+)",', pyproject, flags=re.M))
+    # The hosted set is the Docker set minus what the hosted path never imports; every remaining pin is identical.
+    assert set(hosted) <= set(pins) and sorted(set(pins) - set(hosted)) == ["scikit-learn==1.4.2", "uvicorn==0.52.1"]
     assert 'entrypoint = "mospi.app.vercel_app:app"' in pyproject
-    assert "mospi/app/vercel_app.py" in json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))["functions"]
+    config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+    assert "mospi/app/vercel_app.py" in config["functions"] and config["regions"] == ["icn1"]     # Supabase project: ap-northeast-2 (Seoul)
+    assert config["functions"]["mospi/app/vercel_app.py"]["maxDuration"] <= 300                     # Hobby maximum
     ignore = (ROOT / ".vercelignore").read_text(encoding="utf-8").splitlines()
-    assert "/*" in ignore and "!/mospi/" in ignore and "!/data/demo/" in ignore and "/data/*" in ignore and "/*/runs/" in ignore
-    for never in ("*.sqlite", "users*.json", ".env", ".env.*", "*.csv"):
+    assert "/*" in ignore and "!/mospi/" in ignore and "/*/runs/" in ignore
+    assert not any(line.startswith("!/data") for line in ignore)          # review data come from the database, never the bundle
+    assert "!/deploy/supabase/prod-ca-2021.crt" in ignore and "/deploy/supabase/*" in ignore
+    for never in ("*.sqlite", "users*.json", ".env", ".env.*", "*.csv", "*.parquet", "*.dump"):
         assert never in ignore, never
     for folder in ("data/raw", "notebooks", "docs", "tests", "scripts"):
         assert f"!/{folder}/" not in ignore, folder

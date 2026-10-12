@@ -20,12 +20,18 @@ def auth(role: str) -> dict[str, str]:
 
 
 def _urls() -> dict[str, str]:
+    """Admin (session pooler), app (mospi_app) and reader (mospi_reader) URLs.
+
+    The reader uses ``MOSPI_HOSTED_DATABASE_URL`` when set - on Supabase that is the transaction pooler (port 6543), the
+    path the hosted instance takes, so the tests exercise pooler behaviour.  Otherwise it is the app URL with the reader's
+    credentials (a plain PostgreSQL server)."""
     load_env_file(force=True)
     from psycopg.conninfo import make_conninfo
     admin, app = os.environ.get("MOSPI_DB_ADMIN_URL", ""), os.environ.get("MOSPI_DATABASE_URL", "")
     if not admin or not app or not os.environ.get("MOSPI_DB_READER_PASSWORD"):
         pytest.skip("MOSPI_DB_ADMIN_URL, MOSPI_DATABASE_URL and MOSPI_DB_READER_PASSWORD are needed for PostgreSQL tests")
-    return {"admin": admin, "app": app, "reader": make_conninfo(app, user="mospi_reader", password=os.environ["MOSPI_DB_READER_PASSWORD"])}
+    reader = os.environ.get("MOSPI_HOSTED_DATABASE_URL", "").strip() or make_conninfo(app, user="mospi_reader", password=os.environ["MOSPI_DB_READER_PASSWORD"])
+    return {"admin": admin, "app": app, "reader": reader}
 
 
 @pytest.fixture()
@@ -42,7 +48,8 @@ def pg(monkeypatch):
     monkeypatch.setenv("MOSPI_DB_ADMIN_URL", urls["admin"])
     monkeypatch.setenv("MOSPI_KEY_HMAC_SECRET", "test-secret-" + schema)
     monkeypatch.setenv("MOSPI_CHECK_INTERVAL_MINUTES", "0")
-    databases = {"admin": admin, "app": Database(urls["app"], schema=schema), "reader": Database(urls["reader"], schema=schema), "schema": schema, "urls": urls}
+    databases = {"admin": admin, "app": Database(urls["app"], schema=schema), "reader": Database(urls["reader"], schema=schema, read_only=True),
+                 "schema": schema, "urls": urls}
     try:
         yield databases
     finally:
