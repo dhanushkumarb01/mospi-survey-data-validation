@@ -275,12 +275,43 @@ def test_vercel_entrypoint_without_a_database_refuses_data_plainly_and_never_fal
     monkeypatch.delenv("MOSPI_AUDIT_BACKEND")
 
 
+def test_the_hosted_pages_work_without_the_packages_left_out_of_the_vercel_install(tmp_path):
+    """Vercel installs pyproject.toml only: the hosted entrypoint and its pages must work with those packages absent."""
+    import os
+    import subprocess
+    import sys
+    shutil.copytree(ROOT / "data" / "demo", tmp_path / "demo")
+    probe = f"""
+import sys
+class Absent:
+    def find_spec(self, name, path=None, target=None):
+        if name.split('.')[0] in ('scipy', 'pyarrow', 'sklearn', 'uvicorn'):
+            raise ImportError(name + ' is not installed')
+sys.meta_path.insert(0, Absent())
+import mospi.app.vercel_app
+from pathlib import Path
+from fastapi.testclient import TestClient
+from mospi.app.api import create_app
+root = Path({str(tmp_path / "demo")!r})
+client = TestClient(create_app(root / 'fusion' / 'runs', root, review_only=True, audit_read_only=True))
+for path in ('/api/overview', '/api/cases?summaries=true', '/api/groups', '/api/worklist', '/api/aggregates', '/api/audit/verify'):
+    assert client.get(path).status_code == 200, path
+case = client.get('/api/cases').json()['rows'][0]['case_id']
+assert client.get('/api/cases/' + case).json()['story']['record']
+assert client.post('/api/validate/record', json={{'record': {{'cws_status': '31', 'age': '30'}}}}).status_code == 200
+print('OK')
+"""
+    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, capture_output=True, text=True, timeout=600,
+                            env={**os.environ, "MOSPI_NO_ENV_FILE": "1", "VERCEL": "1"})
+    assert result.returncode == 0 and result.stdout.strip().endswith("OK"), result.stderr[-800:]
+
+
 def test_vercel_packaging_matches_the_docker_dependencies_and_excludes_data():
     pins = sorted(line.strip() for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#"))
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     hosted = sorted(re.findall(r'^\s+"([^"]+==[^"]+)",', pyproject, flags=re.M))
     # The hosted set is the Docker set minus what the hosted path never imports; every remaining pin is identical.
-    assert set(hosted) <= set(pins) and sorted(set(pins) - set(hosted)) == ["scikit-learn==1.4.2", "uvicorn==0.52.1"]
+    assert set(hosted) <= set(pins) and sorted(set(pins) - set(hosted)) == ["pyarrow==24.0.0", "scikit-learn==1.4.2", "scipy==1.15.3", "uvicorn==0.52.1"]
     assert 'entrypoint = "mospi.app.vercel_app:app"' in pyproject
     config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
     assert "mospi/app/vercel_app.py" in config["functions"] and config["regions"] == ["icn1"]     # Supabase project: ap-northeast-2 (Seoul)

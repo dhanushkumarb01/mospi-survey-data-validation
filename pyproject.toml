@@ -1,6 +1,8 @@
 # Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md): the hosted, review-only serving set.  Docker and local
 # installs use requirements.txt (the full pipeline).  Every pin here must equal the one in requirements.txt, and the
-# packages the hosted path never imports (scikit-learn, uvicorn) are left out (checked by tests/app/test_deployment.py).
+# packages the hosted path never imports (pyarrow, scipy, scikit-learn, uvicorn) are left out, which keeps the function
+# under Vercel's standard 250 MB bundle size: above it, dependencies are unpacked into /tmp at run time and the space
+# the hosted review data needs is gone (checked by tests/app/test_deployment.py).
 [project]
 name = "mospi-survey-data-validation"
 version = "2.2.0"
@@ -10,8 +12,6 @@ requires-python = "==3.12.*"
 dependencies = [
     "pandas==2.2.2",
     "numpy==1.26.4",
-    "pyarrow==24.0.0",
-    "scipy==1.15.3",
     "duckdb==1.5.5",
     "PyYAML==6.0.3",
     "fastapi==0.141.1",

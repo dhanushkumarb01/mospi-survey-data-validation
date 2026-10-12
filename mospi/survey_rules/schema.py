@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import pandas as pd
-import pyarrow.parquet as pq
 
 CANONICAL_PREFIX = "MoSPI_"
 LEGACY_PREFIXES = ("iospi_",)
@@ -48,6 +47,12 @@ def canonical_name(name: str) -> str:
 
 @lru_cache(maxsize=256)
 def _physical_names(path: str, mtime_ns: int) -> tuple[str, ...]:  # mtime keys the cache
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:            # the hosted (serving-only) install has no pyarrow; DuckDB reads the same schema
+        import duckdb
+        with duckdb.connect() as connection:
+            return tuple(r[0] for r in connection.execute("DESCRIBE SELECT * FROM read_parquet(?)", [path]).fetchall())
     return tuple(pq.ParquetFile(path).schema_arrow.names)
 
 
