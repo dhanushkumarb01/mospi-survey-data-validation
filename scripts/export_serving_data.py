@@ -20,9 +20,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fusion.explain import SourceResolver  # noqa: E402
+from mospi.paths import data_root  # noqa: E402
+from mospi.pipeline.stages.fusion.explain import SourceResolver  # noqa: E402
 
-# Files the serving layer reads from each source run (fusion/api.py, fusion/explain.py).
+# Files the serving layer reads from each source run (mospi/app/api.py, mospi/pipeline/stages/fusion/explain.py).
 SERVED_FILES = {
     "preprocessing": ["prepared_persons.parquet", "run_metadata.json"],
     "statistical": ["statistical_evidence.parquet", "statistical_report.json", "run_metadata.json"],
@@ -81,7 +82,7 @@ def export(project: Path, output: Path, *, include_v1: bool, include_audit: bool
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export the stored runs the review workspace needs into a portable directory.")
-    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--project-root", type=Path, default=data_root(), help="Data root holding <stage>/runs (default: data/ of this repository, or MOSPI_DATA_DIR).")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--include-v1", action="store_true", help="Also export superseded V1 Fusion runs.")
     parser.add_argument("--without-audit", action="store_true", help="Do not copy review_audit.sqlite (the workspace then starts with an empty audit trail).")

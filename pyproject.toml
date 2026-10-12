@@ -1,5 +1,8 @@
-# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md).  Docker and local installs use requirements.txt,
-# which must list the same pins (checked by fusion/tests/test_deployment.py).
+# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md): the hosted, review-only serving set.  Docker and local
+# installs use requirements.txt (the full pipeline).  Every pin here must equal the one in requirements.txt, and the
+# packages the hosted path never imports (pyarrow, scipy, scikit-learn, uvicorn) are left out, which keeps the function
+# under Vercel's standard 250 MB bundle size: above it, dependencies are unpacked into /tmp at run time and the space
+# the hosted review data needs is gone (checked by tests/app/test_deployment.py).
 [project]
 name = "mospi-survey-data-validation"
 version = "2.2.0"
@@ -9,16 +12,20 @@ requires-python = "==3.12.*"
 dependencies = [
     "pandas==2.2.2",
     "numpy==1.26.4",
-    "pyarrow==24.0.0",
-    "scipy==1.15.3",
-    "scikit-learn==1.4.2",
     "duckdb==1.5.5",
     "PyYAML==6.0.3",
     "fastapi==0.141.1",
     "starlette==1.6.0",
     "pydantic==2.12.4",
-    "uvicorn==0.52.1",
+    "psycopg[binary]==3.2.3",
 ]
 
 [tool.vercel]
-entrypoint = "fusion.vercel_app:app"
+entrypoint = "mospi.app.vercel_app:app"
+
+[tool.pytest.ini_options]
+# The data/ folder holds stored runs (gigabytes); tests live only in tests/.
+testpaths = ["tests"]
+# Short tracebacks: a long traceback prints function arguments, which for a failed database connection include the
+# connection parameters (password).  Never switch to --tb=long/--showlocals for --postgres runs.
+addopts = "--tb=short"
