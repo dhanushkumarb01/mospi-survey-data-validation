@@ -138,8 +138,8 @@ Results of 12 Oct 2026:
   a second run inserted nothing; the 13 SQLite sources were byte-identical (SHA-256) before and after.
 * Registry: 12 runs (2024_first_visit_v2_2 APPROVED_REAL hosted; 2024_first_visit_demo SYNTHETIC hosted; 10 INTERNAL_REAL).
 * Serving set: 21 files, 114,992,636 bytes, uploaded in 48 s, **VERIFIED**; a second load uploaded nothing.
-* Database size after loading: **134 MB of the 500 MB Free limit** (schema `mospi` ≈ 120 MB: `serving_chunks` 119.5 MB, every
-  other table < 0.2 MB). Budget was 400 MB.
+* Database size after loading and testing: **137 MB of the 500 MB Free limit** (schema `mospi` 120.2 MB: `serving_chunks` 119.5 MB,
+  every other table < 0.2 MB; the rest is Supabase's own schemas). Budget was 400 MB.
 
 ## 6. Hosted instance (Vercel)
 
@@ -147,7 +147,9 @@ Results of 12 Oct 2026:
 local instance), sign-in required for every `/api` request. The serving set is fetched only after a request has been
 authenticated, so an anonymous request never causes a download. `/healthz` (no sign-in) reports database reachability, TLS,
 the applied schema version and whether the review data are loaded, never addresses or records. Function region `icn1`
-(Seoul, the Supabase region), `maxDuration` 60 s, at most 3 database connections per instance. Details and the Vercel
+(Seoul, the Supabase region), `maxDuration` 60 s, at most 3 database connections per instance. The Vercel install leaves out pyarrow,
+scipy, scikit-learn and uvicorn so the function stays under the standard 250 MB bundle and `/tmp` keeps room for the review data.
+Production check of 12 Oct 2026: the cold-start load took 7.6 s; 25 of 25 checks passed (VERCEL_REVIEW_ONLY_DEPLOYMENT.md §0). Details and the Vercel
 environment variables: docs/deployment/VERCEL_REVIEW_ONLY_DEPLOYMENT.md §0.
 
 ## 7. Upload & validate, worker, periodic checks (local instance)
@@ -180,6 +182,10 @@ the audit trail, and the laptop's PostgreSQL `mospi_v22` is an untouched offline
 * Vercel Hobby: 300 s maximum duration (set to 60 s), 2 GB memory, 500 MB Python bundle, about 500 MB of `/tmp`.
 * From this laptop, downloads from the Supabase pooler measured only 0.02-0.08 MB/s (uploads 4-6 MB/s), so verification is done
   in the database and backups leave out serving bytes. Vercel in the same region does not share this laptop's network path.
+* This laptop's connection dropped repeatedly on 12 Oct 2026 (DNS failures, closed SSL connections), so the `--postgres` suite could
+  not finish one uninterrupted run; every test passed on the final code across separate runs (§10).
+* The admin password was pasted in a chat and, once, printed by a long pytest traceback into a local log (deleted; pytest now uses
+  short tracebacks). Rotate it in the dashboard (Project Settings → Database → Reset password) and update `.env`.
 
 ## 10. Tests
 
@@ -187,6 +193,12 @@ the audit trail, and the laptop's PostgreSQL `mospi_v22` is an untouched offline
 python -m pytest                 # no database needed
 python -m pytest --postgres      # throwaway schemas in the Supabase database; never the "mospi" schema
 ```
+
+Results on the final code (12 Oct 2026): default suite 157 passed, 44 skipped (15 real-data, 29 PostgreSQL; opt-in), 0 failed. The 29
+PostgreSQL tests all passed against Supabase, but across several runs: the laptop's network dropped during the full runs (first: 19
+passed, 1 failed and 10 errors, all `getaddrinfo failed`; second: 21 passed, 3 failed, 5 errors, again DNS and closed connections), and
+each affected test passed when re-run. Those runs also found one real defect, since fixed: a hosted download that failed its checksum
+left its `.partial` file behind (nothing was ever served from it). Three throwaway test schemas left by interrupted teardowns were dropped.
 
 `tests/postgres/test_supabase_hosted.py` covers per-transaction settings behind the transaction pooler, RLS on every table,
 `anon`/`authenticated`/`service_role`/`PUBLIC` denied, the reader refused on every base table, the serving set (verified in the
@@ -207,4 +219,5 @@ audit migration, the backup drill, uploads and the worker.
    (`backup restore`) if they must be kept. The laptop's PostgreSQL `mospi_v22` still holds the state of 12 Oct 2026 before the
    move; its old connection values are kept in `.env` as `MOSPI_LOCAL_BACKUP_*` (not read by the application).
 4. Rotate or drop the Supabase role passwords if the project is kept (`DROP ROLE mospi_reader, mospi_app` after
-   `DROP SCHEMA mospi CASCADE`).
+   `DROP SCHEMA mospi CASCADE`), and reset the `postgres` password (see §9). Revoke the Vercel project token
+   (Vercel → Project Settings → Tokens) once deploys are no longer needed.

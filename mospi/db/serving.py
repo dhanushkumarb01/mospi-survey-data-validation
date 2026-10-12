@@ -296,23 +296,26 @@ class HostedServingData:
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name(target.name + ".partial")
         digest = hashlib.sha256()
-        with open(partial, "wb") as handle:
-            for first in range(0, int(item["chunks"]), FETCH_CHUNKS):
-                with self.db.transaction() as connection, connection.cursor(binary=True) as cursor:
-                    cursor.execute("SELECT seq, sha256, data FROM hosted_serving_chunks WHERE run_id = %s AND path = %s AND seq >= %s AND seq < %s ORDER BY seq",
-                                   (item["run_id"], item["path"], first, first + FETCH_CHUNKS))
-                    rows = cursor.fetchall()
-                if [r["seq"] for r in rows] != list(range(first, min(first + FETCH_CHUNKS, int(item["chunks"])))):
-                    raise ServingError(f"{item['path']}: chunks are missing in the database.")
-                for row in rows:
-                    data = bytes(row["data"])
-                    if hashlib.sha256(data).hexdigest() != row["sha256"]:
-                        raise ServingError(f"{item['path']}: a chunk failed its SHA-256 check.")
-                    digest.update(data)
-                    handle.write(data)
-        if digest.hexdigest() != item["sha256"] or partial.stat().st_size != int(item["bytes"]):
-            partial.unlink(missing_ok=True)
-            raise ServingError(f"{item['path']}: the downloaded file failed its SHA-256 check.")
+        try:
+            with open(partial, "wb") as handle:
+                for first in range(0, int(item["chunks"]), FETCH_CHUNKS):
+                    with self.db.transaction() as connection, connection.cursor(binary=True) as cursor:
+                        cursor.execute("SELECT seq, sha256, data FROM hosted_serving_chunks WHERE run_id = %s AND path = %s AND seq >= %s AND seq < %s ORDER BY seq",
+                                       (item["run_id"], item["path"], first, first + FETCH_CHUNKS))
+                        rows = cursor.fetchall()
+                    if [r["seq"] for r in rows] != list(range(first, min(first + FETCH_CHUNKS, int(item["chunks"])))):
+                        raise ServingError(f"{item['path']}: chunks are missing in the database.")
+                    for row in rows:
+                        data = bytes(row["data"])
+                        if hashlib.sha256(data).hexdigest() != row["sha256"]:
+                            raise ServingError(f"{item['path']}: a chunk failed its SHA-256 check.")
+                        digest.update(data)
+                        handle.write(data)
+            if digest.hexdigest() != item["sha256"] or partial.stat().st_size != int(item["bytes"]):
+                raise ServingError(f"{item['path']}: the downloaded file failed its SHA-256 check.")
+        except BaseException:
+            partial.unlink(missing_ok=True)        # nothing half-written is left behind, whatever stopped the download
+            raise
         os.replace(partial, target)
 
     def status(self) -> dict[str, Any]:

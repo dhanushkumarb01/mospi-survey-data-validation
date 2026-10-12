@@ -17,7 +17,7 @@ review data of the one run approved for hosting (PLFS 2024 first visit, `2024_fi
 |---|---|
 | Region | `icn1` (Seoul), next to the Supabase project (`ap-northeast-2`) — `vercel.json` |
 | Function | `mospi/app/vercel_app.py`, `maxDuration` 60 s (Hobby maximum is 300 s), 2 GB memory |
-| Dependencies | `pyproject.toml`: the `requirements.txt` pins without scikit-learn and uvicorn (never imported on the hosted path) |
+| Dependencies | `pyproject.toml`: the `requirements.txt` pins without pyarrow, scipy, scikit-learn and uvicorn (not needed on the hosted path). This keeps the function under Vercel's standard 250 MB: at 453 MB Vercel unpacked dependencies into `/tmp` at run time and the review data no longer fitted (`No space left on device`, seen on the first deployment of 12 Oct 2026). |
 | `MOSPI_AUDIT_BACKEND` | `postgres` |
 | `MOSPI_DATABASE_URL` (Sensitive) | the `mospi_reader` transaction-pooler URL (`MOSPI_HOSTED_DATABASE_URL` in the local `.env`) — never the admin or app role |
 | `MOSPI_DB_CA_FILE` | `deploy/supabase/prod-ca-2021.crt` (public CA, the only `deploy/` file uploaded) |
@@ -31,6 +31,8 @@ database is unreachable or a checksum fails, data requests answer 503 with a pla
 
 Deploy (from the repository root, `VERCEL_TOKEN` in the environment): `vercel link`, set the variables above with
 `vercel env add … production`, then `vercel deploy --prod`. Teardown after the week: docs/deployment/POSTGRESQL.md §11.
+
+**Deployed and verified, 12 Oct 2026:** https://mospi-survey-data-validation.vercel.app (region icn1). 25 of 25 HTTP checks passed: health (database reachable over TLS, schema `0004_hosted_serving`, no host or user in the response), sign-in refused without or with a wrong token, the first signed-in request on a cold instance loaded the 115 MB serving set from Supabase in 7.6 s, only the approved run listed, 415,549 records and the priority-band counts equal to the source Parquet, queue order equal to the source for the first 50, 12,749 FSU groups, worklist, area trends, audit chain INTACT (head `cb9c2df7…`, the SQLite head), and decisions, batches and exports refused. Ten case pages (5 random, 5 from the queue) were identical, field for field and including the evidence story, to the pages the local workspace builds from the original untrimmed data.
 
 ## 1. What the hosted instance is
 
