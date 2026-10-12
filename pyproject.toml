@@ -26,3 +26,6 @@ entrypoint = "mospi.app.vercel_app:app"
 [tool.pytest.ini_options]
 # The data/ folder holds stored runs (gigabytes); tests live only in tests/.
 testpaths = ["tests"]
+# Short tracebacks: a long traceback prints function arguments, which for a failed database connection include the
+# connection parameters (password).  Never switch to --tb=long/--showlocals for --postgres runs.
+addopts = "--tb=short"
