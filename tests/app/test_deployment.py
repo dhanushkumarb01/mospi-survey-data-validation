@@ -286,9 +286,11 @@ def test_vercel_packaging_matches_the_docker_dependencies_and_excludes_data():
     assert "mospi/app/vercel_app.py" in config["functions"] and config["regions"] == ["icn1"]     # Supabase project: ap-northeast-2 (Seoul)
     assert config["functions"]["mospi/app/vercel_app.py"]["maxDuration"] <= 300                     # Hobby maximum
     ignore = (ROOT / ".vercelignore").read_text(encoding="utf-8").splitlines()
-    assert "/*" in ignore and "!/mospi/" in ignore and "/*/runs/" in ignore
+    # Folder patterns without a trailing slash: the Vercel CLI tests folder paths without one ("!/mospi/" uploaded nothing).
+    assert "/*" in ignore and "!/mospi" in ignore and "/*/runs" in ignore and "**/__pycache__" in ignore
+    assert not [line for line in ignore if line.endswith("/") and not line.startswith("#")]
     assert not any(line.startswith("!/data") for line in ignore)          # review data come from the database, never the bundle
-    assert "!/deploy/supabase/prod-ca-2021.crt" in ignore and "/deploy/supabase/*" in ignore
+    assert "!/deploy/supabase/prod-ca-2021.crt" in ignore and "/deploy/supabase/*" in ignore and "!/deploy/supabase" in ignore
     for never in ("*.sqlite", "users*.json", ".env", ".env.*", "*.csv", "*.parquet", "*.dump"):
         assert never in ignore, never
     for folder in ("data/raw", "notebooks", "docs", "tests", "scripts"):
