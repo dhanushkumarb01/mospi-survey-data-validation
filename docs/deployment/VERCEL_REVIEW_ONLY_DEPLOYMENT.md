@@ -6,6 +6,32 @@
 
 ---
 
+## 0. Current set-up: Supabase-backed hosted review (12 October 2026)
+
+This supersedes the bundled-data default of §6. The hosted instance reads **everything from Supabase PostgreSQL** through
+the reader role and the `hosted_*` views (docs/deployment/POSTGRESQL.md): the review records, the audit verification and the
+review data of the one run approved for hosting (PLFS 2024 first visit, `2024_first_visit_v2_2`). No `data/` file is uploaded
+(`.vercelignore`), so the synthetic demo bundle is not deployed either. Decisions and uploads remain local only.
+
+| Vercel setting | Value |
+|---|---|
+| Region | `icn1` (Seoul), next to the Supabase project (`ap-northeast-2`) — `vercel.json` |
+| Function | `mospi/app/vercel_app.py`, `maxDuration` 60 s (Hobby maximum is 300 s), 2 GB memory |
+| Dependencies | `pyproject.toml`: the `requirements.txt` pins without scikit-learn and uvicorn (never imported on the hosted path) |
+| `MOSPI_AUDIT_BACKEND` | `postgres` |
+| `MOSPI_DATABASE_URL` (Sensitive) | the `mospi_reader` transaction-pooler URL (`MOSPI_HOSTED_DATABASE_URL` in the local `.env`) — never the admin or app role |
+| `MOSPI_DB_CA_FILE` | `deploy/supabase/prod-ca-2021.crt` (public CA, the only `deploy/` file uploaded) |
+| `MOSPI_USERS_JSON` (Sensitive) | token hashes of the hosted users (`MOSPI_HOSTED_USERS_JSON` in the local `.env`) |
+| `MOSPI_DB_MAX_CONNECTIONS` | `3` |
+
+Behaviour: every `/api` request needs a valid access token. After sign-in, the first data request of a new function instance
+downloads the serving set (115 MB, SHA-256 verified per chunk and per file) into `/tmp`; later requests reuse it. If the
+database is unreachable or a checksum fails, data requests answer 503 with a plain message and nothing partial is served.
+`/healthz` reports database reachability, TLS, schema version and whether the review data are loaded.
+
+Deploy (from the repository root, `VERCEL_TOKEN` in the environment): `vercel link`, set the variables above with
+`vercel env add … production`, then `vercel deploy --prod`. Teardown after the week: docs/deployment/POSTGRESQL.md §11.
+
 ## 1. What the hosted instance is
 
 A **review-only** copy of the existing V2.2 workspace (the same `mospi/app/api.py` and `mospi/app/ui`) that shows stored validation runs:

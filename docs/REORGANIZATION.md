@@ -2,6 +2,14 @@
 
 The repository was reorganized from a flat set of top-level stage folders into one package (`mospi/`) with separate `tests/`, `data/` and `docs/`. No validation algorithm, statistic, model, score, queue order, schema, dataset contract or review logic was changed. The stored data, runs, audit databases and result files were moved without modification; this was checked file by file (size, modification time, and SHA-256 for every file under 8 MB and every audit database).
 
+## Later change: Supabase hosting (12 Oct 2026)
+
+Added `mospi/db/serving.py` (hosted serving set), migration `mospi/db/migrations/0004_hosted_serving.sql`,
+`deploy/supabase/prod-ca-2021.crt` (public CA), `tests/postgres/test_supabase_hosted.py` and `.env.example`. Removed the
+Cloudflare Tunnel / signed-gateway path and the laptop's remote-access tooling: `mospi/gateway/`, `mospi/db/remote_access.py`,
+`deploy/cloudflare/`, `deploy/postgres/`, `docs/deployment/CLOUDFLARE_TUNNEL.md`, `tests/app/test_gateway.py`,
+`tests/postgres/test_gateway_postgres.py`. See docs/deployment/POSTGRESQL.md.
+
 ## Old to new
 
 | Before | After |
