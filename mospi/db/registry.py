@@ -9,6 +9,7 @@
 
     python -m mospi.db.registry register --fusion-root data/fusion/runs --data-class INTERNAL_REAL
     python -m mospi.db.registry register --fusion-root data/demo/fusion/runs --data-class SYNTHETIC --hosted
+    python -m mospi.db.registry register --fusion-root data/fusion/runs --run 2024_first_visit_v2_2 --data-class APPROVED_REAL --hosted         --approval "<reference>" --approver "<name>" --approver-role "<role>"      # records HOSTING_APPROVED in the audit trail
     python -m mospi.db.registry list
 """
 from __future__ import annotations
@@ -74,28 +75,41 @@ def manifest_digest(manifest: dict[str, Any]) -> str:
 
 
 def register_existing(db: Database, fusion_root: Path, project_root: Path, *, data_class: str, hosted: bool = False,
-                      approval: str | None = None) -> list[dict[str, Any]]:
-    """Record runs that predate the registry (status REGISTERED).  Already-registered runs are left unchanged."""
+                      approval: str | None = None, runs: list[str] | None = None, approver: str | None = None,
+                      approver_role: str | None = None) -> list[dict[str, Any]]:
+    """Record runs that predate the registry (status REGISTERED).  Already-registered runs are left unchanged.
+
+    For APPROVED_REAL the approval (reference, approver, role, date, run label) is written into the manifest and recorded
+    as a ``HOSTING_APPROVED`` event in the chained operations audit trail, in the same transaction as the registration."""
     if hosted and data_class not in ("SYNTHETIC", "APPROVED_REAL"):
         raise ValueError("Only SYNTHETIC or APPROVED_REAL runs may be visible to the hosted instance (gate G-AUTH).")
-    if data_class == "APPROVED_REAL" and not approval:
-        raise ValueError("APPROVED_REAL needs the reference of the written approval (--approval).")
+    if data_class == "APPROVED_REAL" and not (approval and approver and approver_role):
+        raise ValueError("APPROVED_REAL needs the written approval's reference (--approval), the approver (--approver) and their role (--approver-role).")
     out = []
     for directory in sorted(Path(fusion_root).glob("*")):
         if not ((directory / "run_metadata.json").is_file() and (directory / "fused_cases.parquet").is_file()):
+            continue
+        if runs and directory.name not in runs:
             continue
         if db.fetchone("SELECT 1 FROM runs WHERE run_id = %s", (directory.name,)):
             out.append({"run_id": directory.name, "outcome": "already registered"})
             continue
         started = time.perf_counter()
         manifest = build_manifest(directory, project_root)
+        record = None
         if approval:
-            manifest["hosted_approval"] = approval
+            record = {"reference": approval, "approver": approver, "approver_role": approver_role, "run_label": directory.name,
+                      "data_class": data_class, "hosted_visible": hosted, "approved_utc": datetime.now(timezone.utc).isoformat()}
+            manifest["hosted_approval"] = record
         with db.transaction() as connection:
             connection.execute("""INSERT INTO runs (run_id, release, observation, fusion_version, status, data_class, hosted_visible, records, manifest,
                                   manifest_sha256, code_version) VALUES (%s,%s,%s,%s,'REGISTERED',%s,%s,%s,%s,%s,%s) ON CONFLICT (run_id) DO NOTHING""",
                                (directory.name, manifest["release"], manifest["observation"], manifest["fusion_version"], data_class, hosted,
                                 manifest["records"], json.dumps(manifest), manifest_digest(manifest), None))
+            if record is not None:
+                from .audit import PostgresAuditStore
+                PostgresAuditStore(db).append_operation("HOSTING_APPROVED", subject=directory.name, actor=approver, details=record,
+                                                        actor_role="approver", connection=connection)
         out.append({"run_id": directory.name, "outcome": "registered", "files": len(manifest["files"]), "missing_sources": manifest["source_runs_missing"],
                     "seconds": round(time.perf_counter() - started, 1)})
     return out
@@ -126,6 +140,9 @@ def main() -> int:
     register.add_argument("--data-class", choices=("SYNTHETIC", "INTERNAL_REAL", "APPROVED_REAL"), required=True)
     register.add_argument("--hosted", action="store_true", help="visible to the hosted reader role (SYNTHETIC or APPROVED_REAL only)")
     register.add_argument("--approval", help="reference of the written hosting approval (required for APPROVED_REAL)")
+    register.add_argument("--approver", help="who approved hosting (required for APPROVED_REAL)")
+    register.add_argument("--approver-role", help="the approver's role (required for APPROVED_REAL)")
+    register.add_argument("--run", action="append", help="register only this run (repeatable); default: every run under --fusion-root")
     sub.add_parser("list")
     args = parser.parse_args()
     db = admin_database()
@@ -135,7 +152,8 @@ def main() -> int:
         return 0
     project = args.project_root or args.fusion_root.resolve().parent.parent
     try:
-        for row in register_existing(db, args.fusion_root, project, data_class=args.data_class, hosted=args.hosted, approval=args.approval):
+        for row in register_existing(db, args.fusion_root, project, data_class=args.data_class, hosted=args.hosted, approval=args.approval,
+                                     runs=args.run, approver=args.approver, approver_role=args.approver_role):
             print(row)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)

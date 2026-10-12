@@ -29,7 +29,7 @@ from .migrate import admin_database
 from .migrate_audit import backup_root, sha256_file
 
 TABLES = ("schema_migrations", "audit_events", "audit_verifications", "audit_migrations", "datasets", "dataset_files", "jobs", "job_events",
-          "runs", "integrity_checks", "notifications")
+          "runs", "integrity_checks", "notifications", "serving_files", "serving_chunks")
 
 
 def _binary(name: str) -> str:
@@ -51,6 +51,8 @@ def _params(url: str) -> dict[str, str]:
 def _run(tool: str, args: list[str], url: str, database: str | None = None) -> None:
     params = _params(url)
     env = {**os.environ, "PGPASSWORD": params.get("password", ""), "PGSSLMODE": params.get("sslmode", "prefer")}
+    if params.get("sslrootcert"):
+        env["PGSSLROOTCERT"] = params["sslrootcert"]
     command = [_binary(tool), "-h", params.get("host", "localhost"), "-p", params.get("port", "5432"), "-U", params.get("user", "postgres"),
                "-d", database or params.get("dbname", "postgres"), *args]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=1800)
@@ -69,19 +71,25 @@ def summary(db: Database) -> dict[str, Any]:
     return {"schema": db.schema, "counts": counts, "chains": chains}
 
 
-def create(db: Database, url: str, folder: Path | None = None) -> Path:
+def create(db: Database, url: str, folder: Path | None = None, *, without_serving_data: bool = False) -> Path:
+    """``without_serving_data`` leaves out the bytes of the hosted serving set (serving_chunks): they are rebuilt exactly
+    from the stored runs with ``python -m mospi.db.serving load``, and the dump keeps their file list and checksums."""
     folder = Path(folder or backup_root())
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dump = folder / f"mospi-{db.schema}-{stamp}.dump"
     before = summary(db)
-    _run("pg_dump", ["--format=custom", f"--schema={db.schema}", "--no-privileges", "--file", str(dump)], url)
+    exclude = [f"--exclude-table-data={db.schema}.serving_chunks"] if without_serving_data else []
+    _run("pg_dump", ["--format=custom", f"--schema={db.schema}", "--no-privileges", *exclude, "--file", str(dump)], url)
     after = summary(db)
     if before["counts"] != after["counts"]:
         # Writes happened during the dump; pg_dump is a consistent snapshot, but the summary would not match it.
         dump.unlink()
         raise RuntimeError("The database changed while the backup ran; run it again (or stop the app and worker first).")
     (folder / f"{dump.name}.sha256").write_text(f"{sha256_file(dump)}  {dump.name}\n", encoding="utf-8")
+    if without_serving_data:
+        before["counts"]["serving_chunks"] = 0
+        before["serving_data_excluded"] = True
     (folder / f"{dump.name}.summary.json").write_text(json.dumps({**before, "created_utc": stamp}, indent=2), encoding="utf-8")
     return dump
 
@@ -139,7 +147,9 @@ def verify(dump: Path, url: str, *, keep: bool = False) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Back up, verify and restore the MoSPI operational schema.")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("create").add_argument("--folder", type=Path)
+    make = sub.add_parser("create")
+    make.add_argument("--folder", type=Path)
+    make.add_argument("--without-serving-data", action="store_true", help="leave out serving_chunks bytes (rebuilt from the stored runs)")
     check = sub.add_parser("verify")
     check.add_argument("dump", type=Path)
     check.add_argument("--keep", action="store_true", help="keep the scratch database for inspection")
@@ -151,7 +161,7 @@ def main() -> int:
     url = os.environ["MOSPI_DB_ADMIN_URL"]
     try:
         if args.command == "create":
-            print(create(db, url, args.folder))
+            print(create(db, url, args.folder, without_serving_data=args.without_serving_data))
         elif args.command == "verify":
             result = verify(args.dump, url, keep=args.keep)
             print(json.dumps(result, indent=2))

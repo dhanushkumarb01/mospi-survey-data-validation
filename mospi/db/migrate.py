@@ -13,6 +13,11 @@ Rules
 Roles (least privilege; passwords from ``MOSPI_DB_APP_PASSWORD`` / ``MOSPI_DB_READER_PASSWORD``):
 * ``mospi_app``    local app and worker: INSERT/SELECT on the audit trail (no UPDATE/DELETE), read/write ledgers.
 * ``mospi_reader`` hosted instance: SELECT on the ``hosted_*`` views only, read-only sessions, connection limit.
+
+Supabase hardening (applied with the grants, idempotent): row level security is enabled on every table of the schema,
+with a policy only for ``mospi_app`` (the views run as their owner, so the reader sees rows only through them); every
+privilege on the schema and its objects is revoked from PUBLIC and from Supabase's ``anon``/``authenticated``/
+``service_role`` roles, including default privileges for future objects.
 """
 from __future__ import annotations
 
@@ -30,7 +35,10 @@ APP_ROLE, READER_ROLE = "mospi_app", "mospi_reader"
 APP_WRITE = ("datasets", "dataset_files", "runs", "jobs", "notifications")
 APP_APPEND = ("audit_events", "audit_verifications", "job_events", "integrity_checks")
 APP_READ = ("audit_migrations", "schema_migrations")
-HOSTED_VIEWS = ("hosted_runs", "hosted_audit_events", "hosted_audit_verifications", "hosted_jobs", "hosted_integrity_checks")
+HOSTED_VIEWS = ("hosted_runs", "hosted_audit_events", "hosted_audit_verifications", "hosted_jobs", "hosted_integrity_checks",
+                "hosted_serving_files", "hosted_serving_chunks", "hosted_schema_version")
+# Supabase's API roles (and any other platform role) must never read the schema; revoked whenever they exist.
+PLATFORM_ROLES = ("anon", "authenticated", "service_role", "authenticator")
 
 
 class MigrationError(RuntimeError):
@@ -116,7 +124,11 @@ def apply_grants(db: Database) -> None:
         connection.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM PUBLIC").format(schema))
         connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(schema))
         database = connection.execute("SELECT current_database() AS name").fetchone()["name"]
-        connection.execute(sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(_identifier(database)))
+        # On Supabase the database is shared with the platform's own services (Auth, Storage, Realtime), which connect through
+        # PUBLIC's CONNECT; there the schema-level revocations, row level security and view-only grants protect "mospi" instead.
+        supabase = connection.execute("SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin'").fetchone() is not None
+        if not supabase:
+            connection.execute(sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(_identifier(database)))
         for role in roles:
             connection.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(_identifier(database), _identifier(role)))
             connection.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(schema, _identifier(role)))
@@ -135,6 +147,32 @@ def apply_grants(db: Database) -> None:
             connection.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(schema, reader))
             for view in HOSTED_VIEWS:
                 connection.execute(sql.SQL("GRANT SELECT ON {}.{} TO {}").format(schema, _identifier(view), reader))
+        _harden(connection, db.schema, roles)
+
+
+def _harden(connection, schema_name: str, roles: set[str]) -> None:
+    """Row level security on every table and no access at all for PUBLIC or the platform's API roles."""
+    from psycopg import sql
+    schema = _identifier(schema_name)
+    platform = [r["rolname"] for r in connection.execute("SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)", (list(PLATFORM_ROLES),))]
+    for role in ["PUBLIC", *platform]:
+        grantee = sql.SQL("PUBLIC") if role == "PUBLIC" else _identifier(role)
+        connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM {}").format(schema, grantee))
+        for kind in ("TABLES", "SEQUENCES", "FUNCTIONS"):
+            connection.execute(sql.SQL("REVOKE ALL ON ALL " + kind + " IN SCHEMA {} FROM {}").format(schema, grantee))
+            connection.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE ALL ON " + kind + " FROM {}").format(schema, grantee))
+    tables = [r["relname"] for r in connection.execute(
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = %s AND c.relkind IN ('r', 'p')",
+        (schema_name,))]
+    for table in tables:
+        connection.execute(sql.SQL("ALTER TABLE {}.{} ENABLE ROW LEVEL SECURITY").format(schema, _identifier(table)))
+        if APP_ROLE in roles:
+            present = connection.execute("SELECT 1 FROM pg_policies WHERE schemaname = %s AND tablename = %s AND policyname = 'mospi_app_access'",
+                                         (schema_name, table)).fetchone()
+            if not present:
+                # Row filtering is not the control here (grants are); the policy only lets the granted statements see rows.
+                connection.execute(sql.SQL("CREATE POLICY mospi_app_access ON {}.{} TO {} USING (true) WITH CHECK (true)").format(
+                    schema, _identifier(table), _identifier(APP_ROLE)))
 
 
 def admin_database() -> Database:

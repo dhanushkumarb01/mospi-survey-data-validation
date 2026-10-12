@@ -261,6 +261,28 @@ def _file(directory: Path | None, name: str) -> Path | None:
 # person / record context
 
 
+def _person_fields(contract: Any, release: str, observation: str, physical: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """(serial column, {fact name: canonical column}) that person_context reads from prepared_persons."""
+    profile = SOURCE_PROFILES.get((release, observation))
+    fields = {
+        "age": contract.person_fields.get("age"), "district": contract.person_fields.get("district"),
+        **(EXTRA_PERSON_FIELDS.get((release, observation), {})),
+        **({k: v for k, v in profile.context_columns.items()} if profile else {}),
+    }
+    return contract.person_fields[contract.person_serial], {name: column for name, column in fields.items() if column and column in physical}
+
+
+def person_source_columns(path: Path, release: str, observation: str) -> list[str]:
+    """Physical prepared_persons columns person_context can read (used to trim the hosted serving copy)."""
+    contract = next((c for c in CONTRACTS.values() if c.release == release and c.observation == observation), None)
+    if contract is None:
+        return []
+    physical = column_map(path)
+    serial, wanted = _person_fields(contract, release, observation, physical)
+    names = ["MoSPI_record_key", serial, *wanted.values()]
+    return list(dict.fromkeys(physical[n] for n in names if n in physical))
+
+
 def person_context(case: dict[str, Any], prep_dir: Path | None) -> dict[str, Any]:
     release, observation = str(case["release"]), str(case["observation_type"])
     record_key, _, person = str(case["source_observation_id"]).partition("|person=")
@@ -274,15 +296,8 @@ def person_context(case: dict[str, Any], prep_dir: Path | None) -> dict[str, Any
     path = _file(prep_dir, "prepared_persons.parquet")
     if contract is None or path is None:
         return context
-    profile = SOURCE_PROFILES.get((release, observation))
-    fields = {
-        "age": contract.person_fields.get("age"), "district": contract.person_fields.get("district"),
-        **(EXTRA_PERSON_FIELDS.get((release, observation), {})),
-        **({k: v for k, v in profile.context_columns.items()} if profile else {}),
-    }
-    serial = contract.person_fields[contract.person_serial]
     physical = column_map(path)     # stored runs may hold the legacy iospi_* names (plan W0.1)
-    wanted = {name: column for name, column in fields.items() if column and column in physical}
+    serial, wanted = _person_fields(contract, release, observation, physical)
     if serial not in physical or "MoSPI_record_key" not in physical or not wanted:
         return context
     select = ", ".join(f'"{physical[column]}" AS "{name}"' for name, column in wanted.items())
