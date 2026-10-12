@@ -3,9 +3,8 @@
 * ``sqlite`` (default): per-run ``review_audit.sqlite``, exactly as V2.2; no upload page.
 * ``postgres``: PostgreSQL (``MOSPI_DATABASE_URL``).  The local instance refuses to start while migrations are
   pending, or while a SQLite store holds review history that was never migrated (or changed after migration),
-  so the two stores can never silently diverge.  The hosted instance uses the read-only reader views.
-* ``gateway`` (hosted only): the same reader views, read through the hosted read gateway on the processing machine
-  over a Cloudflare Tunnel (mospi/gateway; docs/deployment/CLOUDFLARE_TUNNEL.md).  PostgreSQL is not exposed.
+  so the two stores can never silently diverge.  The hosted instance (Vercel) uses the read-only reader role and
+  the ``hosted_*`` views only, on the Supabase transaction pooler (docs/deployment/POSTGRESQL.md).
 """
 from __future__ import annotations
 
@@ -24,8 +23,8 @@ class BackendError(RuntimeError):
 def audit_backend() -> str:
     load_env_file()
     value = os.environ.get("MOSPI_AUDIT_BACKEND", "sqlite").strip().lower() or "sqlite"
-    if value not in {"sqlite", "postgres", "gateway"}:
-        raise BackendError("MOSPI_AUDIT_BACKEND must be 'sqlite', 'postgres' or 'gateway' (hosted instance only).")
+    if value not in {"sqlite", "postgres"}:
+        raise BackendError("MOSPI_AUDIT_BACKEND must be 'sqlite' or 'postgres'.")
     return value
 
 
@@ -66,14 +65,9 @@ def build(fusion_root: Path, project_root: Path, *, hosted: bool) -> tuple[Any, 
     backend = audit_backend()
     if backend == "sqlite":
         return None, None
-    if backend == "gateway":
-        if not hosted:
-            raise BackendError("MOSPI_AUDIT_BACKEND=gateway is for the hosted instance; this machine uses 'postgres' directly.")
-        from mospi.gateway.client import from_env
-        return from_env()
     from mospi.db.audit import PostgresAuditStore
     from mospi.db.connection import database_from_env
-    db = database_from_env(application_name="mospi-hosted" if hosted else "mospi-app")
+    db = database_from_env(application_name="mospi-hosted" if hosted else "mospi-app", read_only=hosted)
     if db is None:
         raise BackendError("MOSPI_AUDIT_BACKEND=postgres needs MOSPI_DATABASE_URL.")
     if hosted:

@@ -32,9 +32,6 @@ users*.json
 *.p12
 *.pfx
 *.pem
-# cloudflared tunnel credentials/config live in %USERPROFILE%\.cloudflared, never here.
-/deploy/cloudflare/*.json
-/deploy/cloudflare/config.yml
 # Empty placeholder required by docker-compose.yml (build secret default).
 !deploy/no-extra-ca.pem
 
