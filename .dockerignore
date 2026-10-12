@@ -6,11 +6,8 @@
 .git/
 .vscode/
 .idea/
-2023-June2024/
-Jan-Dec2024/
-Post2025/
-EDA/
-evaluation/results/
+data/
+notebooks/
 *.mp4
 *.zip
 *.xlsx

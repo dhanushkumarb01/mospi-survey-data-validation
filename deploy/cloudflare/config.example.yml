@@ -1,0 +1,16 @@
+# cloudflared configuration for a LOCALLY-managed tunnel (alternative to the dashboard set-up in
+# docs/deployment/CLOUDFLARE_TUNNEL.md).  Copy to %USERPROFILE%\.cloudflared\config.yml and fill in the placeholders.
+# The tunnel credentials file (<TUNNEL-UUID>.json) and cert.pem stay in %USERPROFILE%\.cloudflared - never in this repository.
+tunnel: <TUNNEL-UUID>
+credentials-file: C:\Users\<you>\.cloudflared\<TUNNEL-UUID>.json
+
+ingress:
+  # Only the gateway's /v1/ routes, only on this hostname, only to the loopback gateway.  PostgreSQL (5432) is never a service here.
+  - hostname: <gateway hostname, e.g. mospi-gateway.example.org>
+    path: ^/v1/
+    service: http://127.0.0.1:8787
+    originRequest:
+      connectTimeout: 10s
+      disableChunkedEncoding: true
+  # Everything else (other paths, other hostnames) is answered by cloudflared itself with 404.
+  - service: http_status:404

@@ -2,21 +2,22 @@
 # Allowlist: everything is excluded, then only the application code and the SYNTHETIC demo bundle are re-included.
 # Raw PLFS folders, stored runs, audit trails, evaluation runs, EDA, notebooks, media, secrets and docs never upload.
 /*
-!/fusion/
-!/survey_rules/
-!/integrity/
-!/pipeline/
-!/preprocessing/
-!/peer_groups/
-!/pattern/
-!/demo-data/
+!/mospi/
+!/data/
 !/requirements.txt
 !/pyproject.toml
 !/vercel.json
+!/deploy/
 
-# Inside the allowed folders: no stored runs, job records, tests or caches.
+# Inside the allowed folders: only the SYNTHETIC demo bundle of data/ (no raw deliveries, stored runs, job records or evaluation output), no tests or caches.
+/data/*
+!/data/demo/
 /*/runs/
-/pipeline/jobs/
+# deploy/: only the PUBLIC CA certificate the hosted client uses to verify the database server (never a key).
+/deploy/*
+!/deploy/postgres/
+/deploy/postgres/*
+!/deploy/postgres/mospi-db-ca.crt
 **/tests/
 **/__pycache__/
 *.py[cod]

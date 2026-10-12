@@ -10,7 +10,7 @@
 # reads and never overwriting files already in the volume, so review audit
 # trails survive a re-seed.  The app mounts stored runs read-only; only
 # fusion/runs is writable (each run keeps its append-only review_audit.sqlite).
-# Full instructions: docs/DOCKER.md.
+# Full instructions: docs/deployment/DOCKER.md.
 name: mospi-survey-validation
 
 x-build: &build
@@ -39,7 +39,7 @@ services:
     image: mospi-survey-validation:1.0
     <<: *hardening
     # Published on this computer only.  To serve a network, put an approved
-    # TLS reverse proxy in front and enable token authentication (docs/DOCKER.md).
+    # TLS reverse proxy in front and enable token authentication (docs/deployment/DOCKER.md).
     ports:
       - "127.0.0.1:${MOSPI_PORT:-8000}:8000"
     environment:
@@ -64,13 +64,13 @@ services:
     image: mospi-survey-validation:1.0
     <<: *hardening
     volumes:
-      - ${MOSPI_DATA_DIR:-.}:/source:ro
+      - ${MOSPI_DATA_DIR:-./data}:/source:ro
       - mospi-data:/data
     command: ["python", "scripts/export_serving_data.py", "--project-root", "/source", "--output", "/data", "--keep-existing"]
 
   # Optional: the batch pipeline in the same image, writing new immutable runs
   # into MOSPI_DATA_DIR on the host (then re-run the seed service), e.g.
-  #   docker compose --profile batch run --rm batch python -m pipeline.run --release 2025 --suffix v2
+  #   docker compose --profile batch run --rm batch python -m mospi.pipeline.run --release 2025 --suffix v2
   batch:
     profiles: [batch]
     build: *build
@@ -79,11 +79,12 @@ services:
     working_dir: /work
     environment:
       PYTHONPATH: /app
+      MOSPI_DATA_DIR: /work
       HOME: /tmp
     volumes:
-      - ${MOSPI_DATA_DIR:-.}:/work
+      - ${MOSPI_DATA_DIR:-./data}:/work
     mem_limit: ${MOSPI_BATCH_MEM_LIMIT:-6g}
-    command: ["python", "-m", "pipeline.run", "--help"]
+    command: ["python", "-m", "mospi.pipeline.run", "--help"]
 
   # Optional: the automated test suite inside the image.
   tests:

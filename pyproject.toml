@@ -1,5 +1,5 @@
 # Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md).  Docker and local installs use requirements.txt,
-# which must list the same pins (checked by fusion/tests/test_deployment.py).
+# which must list the same pins (checked by tests/app/test_deployment.py).
 [project]
 name = "mospi-survey-data-validation"
 version = "2.2.0"
@@ -18,7 +18,12 @@ dependencies = [
     "starlette==1.6.0",
     "pydantic==2.12.4",
     "uvicorn==0.52.1",
+    "psycopg[binary]==3.2.3",
 ]
 
 [tool.vercel]
-entrypoint = "fusion.vercel_app:app"
+entrypoint = "mospi.app.vercel_app:app"
+
+[tool.pytest.ini_options]
+# The data/ folder holds stored runs (gigabytes); tests live only in tests/.
+testpaths = ["tests"]

@@ -1,6 +1,6 @@
 """Build a SYNTHETIC demonstration data directory for the hosted review-only workspace.
 
-    python scripts/build_demo_data.py --output demo-data
+    python scripts/build_demo_data.py --output data/demo
 
 It writes the small synthetic delivery used by the test suite (no real
 respondent, household or FSU), runs the unchanged batch pipeline on it in a
@@ -24,8 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipeline.run import Inputs, run_pipeline  # noqa: E402
-from pipeline.tests.synthetic import write_delivery  # noqa: E402
+from mospi.pipeline.run import Inputs, run_pipeline  # noqa: E402
+from tests.synthetic import write_delivery  # noqa: E402
 from scripts.export_serving_data import export  # noqa: E402
 
 NOTICE = ("Synthetic demonstration data. Every record, household and FSU shown here was generated for testing; "
@@ -52,7 +52,7 @@ def build(output: Path, *, replace: bool = False, label: str = "demo") -> dict[s
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build a synthetic demonstration data directory for the review-only workspace.")
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "demo-data")
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "demo")
     parser.add_argument("--replace", action="store_true", help="Replace an earlier synthetic demo directory at --output.")
     args = parser.parse_args()
     manifest = build(args.output, replace=args.replace)

@@ -1,7 +1,5 @@
 # --- Survey data (PLFS unit-level microdata; never committed) ---
-/2023-June2024/
-/Jan-Dec2024/
-/Post2025/
+/data/raw/
 *.csv
 *.zip
 *.parquet
@@ -13,7 +11,9 @@
 
 # --- Generated runs, audit trails, exported bundles ---
 **/runs/
-/pipeline/jobs/
+/data/pipeline/jobs/
+# Uploaded deliveries, hashed record keys and job logs (Upload & validate).
+/data/uploads/
 *.sqlite
 *.sqlite3
 *.db
@@ -32,6 +32,9 @@ users*.json
 *.p12
 *.pfx
 *.pem
+# cloudflared tunnel credentials/config live in %USERPROFILE%\.cloudflared, never here.
+/deploy/cloudflare/*.json
+/deploy/cloudflare/config.yml
 # Empty placeholder required by docker-compose.yml (build secret default).
 !deploy/no-extra-ca.pem
 
@@ -70,12 +73,12 @@ desktop.ini
 ~$*
 
 # --- Exploratory notebooks (outputs embed local paths; not needed to deploy) ---
-/EDA/
+/notebooks/
 
 # --- Vercel ---
 # Local CLI link (project and team ids) and pulled environment files.
 .vercel/
 # The SYNTHETIC demonstration bundle (scripts/build_demo_data.py) is committed so the hosted review-only
 # workspace has data to show. It holds no PLFS record; real or approved data never go in this folder.
-!/demo-data/*/runs/
-!/demo-data/**/*.parquet
+!/data/demo/*/runs/
+!/data/demo/**/*.parquet

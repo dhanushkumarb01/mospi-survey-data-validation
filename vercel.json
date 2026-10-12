@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "fusion/vercel_app.py": {
+    "mospi/app/vercel_app.py": {
       "maxDuration": 60,
-      "excludeFiles": "{**/tests/**,**/__pycache__/**,docs/**,EDA/**,*/runs/**,pipeline/jobs/**}"
+      "excludeFiles": "{**/tests/**,**/__pycache__/**,docs/**,notebooks/**,data/*/runs/**,data/pipeline/**}"
     }
   }
 }
