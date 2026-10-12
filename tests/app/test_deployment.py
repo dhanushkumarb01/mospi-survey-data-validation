@@ -77,6 +77,18 @@ def test_review_pages_still_work_in_review_only_mode(project):
     assert client.get("/api/reviews").json()["total"] == 1
 
 
+def test_case_areas_counts_every_record_once_and_changes_nothing(project):
+    root, run = project
+    client = _client(root, review_only=True, audit_read_only=True)
+    data = client.get("/api/case-areas").json()
+    assert data["available"] and data["method"] == "lanes"
+    assert sum(r["records"] for r in data["rows"]) == 2 and {r["area_label"] for r in data["rows"]} == {"Delhi"}
+    assert all(r["band"] == "CHECK_NOW" and r["lanes"] == ["VALUE"] and r["decided"] == 0 for r in data["rows"])
+    assert [r["check_now"] for r in data["rounds"]] == [2]
+    assert client.get("/api/case-areas", params={"state": "07"}).json()["available"] is False     # no district codes in this run
+    assert not (run / "review_audit.sqlite").exists() or client.get("/api/reviews").json()["total"] == 0
+
+
 def test_batch_routes_stay_available_when_review_only_is_off(project):
     root, _ = project
     client = _client(root)
@@ -192,7 +204,7 @@ def test_environment_users_protect_every_api_route(project):
     token = "test-token-not-a-secret"
     users = json.dumps({"users": [{"name": "Reviewer One", "role": "technical", "token_sha256": hashlib.sha256(token.encode()).hexdigest()}]})
     client = _client(root, review_only=True, audit_read_only=True, require_authentication=True, users_json=users)
-    paths = ["/api/runs", "/api/overview", "/api/cases", "/api/cases/case_0", "/api/worklist", "/api/reviews", "/api/groups", "/api/aggregates",
+    paths = ["/api/runs", "/api/overview", "/api/cases", "/api/cases/case_0", "/api/worklist", "/api/reviews", "/api/groups", "/api/aggregates", "/api/case-areas",
              "/api/feedback", "/api/audit/verify", "/api/export/queue", "/api/evaluation", "/api/integrity", "/api/summary", "/api/deployment", "/api/batch",
              "/api/operations", "/api/ingest/contracts", "/api/datasets", "/api/jobs", "/api/notifications"]
     for path in paths:
@@ -213,7 +225,7 @@ def test_every_api_route_is_covered_by_the_access_test():
     """A new /api route must be added to the access test above (or to this allowlist with a reason)."""
     api = "".join((ROOT / "mospi" / "app" / name).read_text(encoding="utf-8") for name in ("api.py", "operations_api.py"))
     routes = set(re.findall(r'@app\.(?:get|post|put|delete|patch)\("(/api/[^"{]*)', api))
-    tested = {"/api/runs", "/api/overview", "/api/cases", "/api/cases/", "/api/worklist", "/api/reviews", "/api/groups", "/api/groups/", "/api/aggregates",
+    tested = {"/api/runs", "/api/overview", "/api/cases", "/api/cases/", "/api/worklist", "/api/reviews", "/api/groups", "/api/groups/", "/api/aggregates", "/api/case-areas",
               "/api/feedback", "/api/audit/verify", "/api/export/queue", "/api/evaluation", "/api/integrity", "/api/summary", "/api/deployment", "/api/batch",
               "/api/batch/", "/api/batch/inputs", "/api/session", "/api/queue/position", "/api/labels", "/api/patterns", "/api/version", "/api/validate/record",
               # Upload & validate, jobs, checks, alerts: role matrix in tests/postgres/test_upload_and_validate.py and the sign-in test below.

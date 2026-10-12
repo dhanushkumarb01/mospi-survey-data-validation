@@ -67,6 +67,18 @@ const ICON_PATHS = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',
   play: '<circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/>',
   back: '<path d="M15 18 9 12l6-6"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  xcircle: '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.6-3.4 3-5.2 6-5.2s5.4 1.8 6 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.7M18 14.9c1.6.7 2.6 2.4 3 5.1"/>',
+  db: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.4M12 17h.01"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  calendar: '<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6l-7-3z"/>',
+  file: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+  bars: '<path d="M4 20h16"/><path d="M7 16v-5M12 16V6M17 16v-8"/>',
+  trend: '<path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/>',
+  spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
 };
 const icon = name => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
 function pageHead({ eyebrow = '', title, lede = '', actions = '' }) {
@@ -82,7 +94,15 @@ const ring = (part, whole, size = 56) => {
     <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central">${whole ? `${Math.round(share * 100)}%` : '—'}</text></svg>`;
 };
 const meter = (part, whole) =>`<div class="meter" role="img" aria-label="${n(part)} of ${n(whole)}"><i style="width:${whole ? Math.min(100, (part / whole) * 100) : 0}%"></i></div>`;
-const infoBox = (html, tone = '') => `<div class="info ${tone}">${icon('info')}<div>${html}</div></div>`;
+/* Summary card used by the overview and Area trends: tinted icon, label, figure, one line of context.  label is plain
+   text (escaped here); value and sub are HTML built by the caller from escaped values. */
+function statCard({ tone = '', ic = 'info', label, badge = '', value, sub = '', href = '', extra = '', title = '' }) {
+  const tag = href ? 'a' : 'div';
+  return `<${tag} class="stat ${tone}"${href ? ` href="${href}"` : ''}${title ? ` title="${esc(title)}"` : ''}>
+    <span class="stat-label"><span class="stat-ic">${icon(ic)}</span><span>${esc(label)}</span>${badge}</span>
+    <span class="stat-main"><span class="stat-text"><span class="stat-value">${value}</span><span class="stat-sub">${sub}</span></span>${extra}${href ? `<span class="stat-go" aria-hidden="true">${icon('chev')}</span>` : ''}</span></${tag}>`;
+}
+const infoBox = (html, tone = '') =>`<div class="info ${tone}">${icon('info')}<div>${html}</div></div>`;
 function pager(prev, next, label = '') {
   return prev || next || label ? `<div class="pager">${label ? `<span>${label}</span>` : ''}${prev || ''}${next || ''}</div>` : '';
 }
@@ -142,10 +162,29 @@ function go(hash) { if (location.hash === hash) route(); else location.hash = ha
 
 /* ------------------------------------------------------------ overview */
 
+// Plain description of each reason (lane) a case can be listed for; shown next to the stored lane label.
+const REASON_HELP = {
+  RULE: 'A questionnaire rule is not met.',
+  RULE_SOFT: 'A softer questionnaire consistency check is not met.',
+  VALUE: 'A reported earnings, wage or hours figure is rare for comparable people.',
+  CODING: 'The occupation code is rarely used for comparable records.',
+};
+const reasonIcon = code => (code === 'CODING' ? 'file' : String(code).startsWith('RULE') ? 'alert' : 'bars');
+const DECISION_TILE = { CONFIRMED_ERROR: ['red', 'xcircle'], VALID_BUT_UNUSUAL: ['green', 'check'], NEEDS_FIELD_VERIFICATION: ['amber', 'alert'],
+  CANNOT_VERIFY: ['grey', 'help'], ESCALATE: ['blue', 'arrow'] };
+// Labelled horizontal bars in HTML (overview lists): each row is a link with its exact value.
+function hbarList(items, { tone = '' } = {}) {
+  const max = Math.max(1, ...items.map(i => i.value));
+  return `<div class="hbars">${items.map(i => `<a class="hbar" href="${i.href}"><span class="hbar-name">${esc(i.label)}</span>
+    <span class="hbar-track">${bar(i.value, max, tone)}</span><span class="hbar-val">${n(i.value)}</span>${i.sub != null ? `<span class="hbar-sub">${i.sub}</span>` : ''}</a>`).join('')}</div>`;
+}
+const headFact = (ic, label, value) => `<div class="head-fact"><span class="head-fact-l">${esc(label)}</span><span class="head-fact-v">${icon(ic)}${value}</span></div>`;
+
 async function overview() {
   crumbs(['Overview']);
-  const [o, rev, grp] = await Promise.all([overviewData(true), api(url('/api/reviews', { run: S.run })),
-    api(url('/api/groups', { run: S.run, band: 'ALERTS', limit: 5 })).catch(() => ({ rows: [], total: 0 }))]);
+  const [o, rev, grp, ops, cube] = await Promise.all([overviewData(true), api(url('/api/reviews', { run: S.run })),
+    api(url('/api/groups', { run: S.run, band: 'ALERTS', limit: 5 })).catch(() => ({ rows: [], total: 0 })),
+    api('/api/operations').catch(() => null), api(url('/api/case-areas', { run: S.run })).catch(() => null)]);
   const bands = Object.fromEntries(o.bands.map(b => [b.band, b]));
   const lanes = isLanes();
   const now = bands[lanes ? 'CHECK_NOW' : 'CRITICAL'] || { records: 0, reviewed: 0 };
@@ -156,56 +195,75 @@ async function overview() {
   const burden = o.burden || {};
   const reasons = o.highest_reasons || {};
   const states = o.highest_by_state || [];
-  const maxState = Math.max(1, ...states.map(s => s.highest));
   const alertFsus = (groups.HIGH || 0) + (groups.MEDIUM || 0);
   const left = Math.max(0, (now.records || 0) - (now.reviewed || 0));
   const nowLabel = lanes ? S.labels.bands.CHECK_NOW : 'highest priority';
   const laterLabel = lanes ? S.labels.bands.CHECK_IF_TIME : 'high priority';
-  const metric = ({ dot = '', label, value, sub, href }) => `<a class="metric" href="${href}"><span class="m-label"><span class="dot ${dot}"></span>${esc(label)}</span>
-    <span class="m-value">${value}</span><span class="m-sub">${sub}</span></a>`;
-  const maxReason = Math.max(1, ...Object.values(reasons));
   const run = currentRun();
   const startHref = `#/worklist${left ? '' : '?tier=B'}`;
+  const listName = lanes ? '“Check now”' : 'the highest group';
+
+  // Operational facts come from the operations store when this instance has one; nothing is shown otherwise.
+  const facts = [];
+  if (ops?.available) {
+    const reg = (ops.runs || []).find(x => x.run_id === S.run);
+    const check = ops.last_check;
+    facts.push(headFact('db', 'Operational records', ops.database?.reachable ? `PostgreSQL${ops.hosted ? ' (live)' : ''}` : '<span class="bad">unreachable</span>'));
+    if (S.run) facts.push(headFact('calendar', reg?.status === 'PUBLISHED' ? 'Published' : 'Registered', reg ? esc(when(reg.published_utc || reg.registered_utc)) : '<span class="warn">not registered</span>'));
+    facts.push(headFact('shield', 'Integrity check', check ? (check.status === 'SUCCEEDED' ? `Passed ${esc(when(check.finished_utc || check.created_utc))}` : '<span class="bad">Found problems</span>') : 'None yet'));
+  }
+
+  const lead = `<div class="stat lead red">
+      <span class="stat-label"><span class="stat-ic">${icon('xcircle')}</span><span>${lanes ? 'Needs a decision' : 'Highest priority, not yet decided'}</span>${lanes ? chip(nowLabel, 'red') : ''}</span>
+      <span class="stat-main"><span class="stat-text"><span class="stat-value">${n(left)}</span>
+        <span class="stat-sub">${n(now.records)} ${now.records === 1 ? 'case' : 'cases'} in the list · ${n(now.reviewed)} decided</span></span>${now.records ? ring(now.reviewed, now.records, 58) : ''}</span>
+      <div class="stat-foot">${lanes && now.records ? `<p>${left ? 'Grouped by FSU and household, so one visit or call can settle several cases.' : `Every “${esc(nowLabel)}” case has a decision.`}</p>
+        <a class="btn cta" href="${startHref}">${left ? 'Start reviewing' : `Open “${esc(laterLabel)}”`}${icon('chev')}</a>`
+        : `<p>${lanes ? 'No case is in this list.' : 'Decisions are recorded on current-method runs.'}</p><a class="btn secondary" href="#/cases">Open case list</a>`}</div>
+    </div>`;
+
+  const reasonRows = Object.entries(reasons).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+    const code = k.toUpperCase();
+    return `<a class="reason-row" href="#/cases?lane=${esc(code)}&tier=A"><span class="reason-ic">${icon(reasonIcon(code))}</span>
+      <span class="reason-txt"><b>${esc(S.labels.lanes[code] || k)}</b>${REASON_HELP[code] ? `<span>${esc(REASON_HELP[code])}</span>` : ''}</span>
+      <span class="reason-num"><b>${n(v)}</b> ${v === 1 ? 'case' : 'cases'}<span>${pct(v, now.records)}</span></span>
+      <span class="reason-bar">${bar(v, now.records, 'red')}</span><span class="reason-go" aria-hidden="true">${icon('chev')}</span></a>`;
+  }).join('');
+  const reasonTotal = Object.values(reasons).reduce((s, v) => s + (v || 0), 0);
+
+  const decisionTiles = Object.entries(r.decisions).map(([k, v]) => {
+    const [tone, ic] = DECISION_TILE[k] || ['grey', 'check'];
+    return `<a class="dtile ${tone}" href="#/reviewed?decision=${esc(k)}"><span class="dtile-ic">${icon(ic)}</span><span class="dtile-l">${esc(S.labels.decisions[k] || k)}</span><span class="dtile-v">${n(v)}</span></a>`;
+  }).join('');
+
+  const hasTrend = lanes && cube?.available && cube.periods?.length > 1;
   app.innerHTML = `${supersededBanner()}
-    ${pageHead({ eyebrow: 'Selected validation run', title: 'Overview', lede: `${esc(runLabel(run).replace(/ \([^)]*\)$/, ''))}<code class="run-id">${esc(run.directory || '')}</code>`,
-      actions: `<a class="btn secondary" href="#/reviewed">Decisions</a><a class="btn secondary" href="${lanes ? '#/worklist' : '#/cases'}">${icon('list')}Open ${lanes ? 'worklist' : 'case list'}</a>` })}
-    <section class="summary" aria-label="Review queue">
-      <div class="metric lead">
-        <div class="m-top"><div>
-        <span class="m-label"><span class="dot red"></span>${lanes ? `Needs a decision · “${esc(nowLabel)}”` : 'Highest priority, not yet decided'}</span>
-        <span class="m-value" style="display:block">${n(left)}</span>
-        <span class="m-sub">${n(now.records)} ${now.records === 1 ? 'case' : 'cases'} in the list · ${n(now.reviewed)} decided</span></div>
-        ${now.records ? ring(now.reviewed, now.records) : ''}</div>
-        ${meter(now.reviewed, now.records)}
-        <div class="m-foot">${lanes && now.records ? `<p>${left ? 'Cases are grouped by FSU and household, so one visit or call can settle several.' : `Every “${esc(nowLabel)}” case has a decision. Continue with “${esc(laterLabel)}”.`}</p>
-          <a class="btn cta" href="${startHref}">${left ? 'Start reviewing' : `Open “${esc(laterLabel)}”`}</a>`
-          : `<p>${lanes ? 'No case is in this list.' : 'Decisions are recorded on current-method runs.'}</p>`}</div>
-      </div>
-      ${metric({ dot: 'amber', label: lanes ? laterLabel : 'High priority', value: n(later.records), sub: `${n(later.reviewed)} decided · review when possible`, href: lanes ? '#/cases?tier=B' : '#/cases' })}
-      ${metric({ dot: 'violet', label: 'FSU group alerts', value: n(alertFsus), sub: 'context about whole FSUs', href: '#/groups' })}
-      ${metric({ label: 'Records in batch', value: n(o.records_processed), sub: lanes ? `${n(o.household_rule_cases ?? 0)} ${o.household_rule_cases === 1 ? 'household breaks' : 'households break'} a rule${o.aggregate_alerts == null ? '' : ` · ${n(o.aggregate_alerts)} unusual area ${o.aggregate_alerts === 1 ? 'change' : 'changes'}`}` : 'all records of the run', href: '#/cases' })}
-      ${metric({ dot: 'green', label: 'Decided so far', value: n(r.decided), sub: `${n(r.opened_without_decision || 0)} opened without a decision`, href: '#/reviewed' })}
+    <div class="page-head ov-head"><div><h1>Overview</h1>
+      <p class="lede">${esc(runLabel(run).replace(/ \([^)]*\)$/, ''))}<code class="run-id">${esc(run.directory || '')}</code></p></div>
+      ${facts.length ? `<div class="head-facts">${facts.join('')}</div>` : ''}</div>
+    <section class="stats ov-stats" aria-label="Review queue">
+      ${lead}
+      ${statCard({ tone: 'amber', ic: 'clock', label: lanes ? laterLabel : 'High priority', value: n(later.records), sub: `${n(later.reviewed)} decided · review when possible`, href: lanes ? '#/cases?tier=B' : '#/cases' })}
+      ${statCard({ tone: 'violet', ic: 'people', label: 'FSU group alerts', value: n(alertFsus), sub: 'Context about whole FSUs', href: '#/groups' })}
+      ${statCard({ tone: 'blue', ic: 'db', label: 'Records in batch', value: n(o.records_processed), sub: lanes ? `${n(o.household_rule_cases ?? 0)} ${o.household_rule_cases === 1 ? 'household breaks' : 'households break'} a rule${o.aggregate_alerts == null ? '' : ` · ${n(o.aggregate_alerts)} unusual area ${o.aggregate_alerts === 1 ? 'change' : 'changes'}`}` : 'All records of the run', href: '#/cases' })}
+      ${statCard({ tone: 'green', ic: 'check', label: 'Decided so far', value: n(r.decided), sub: `${n(r.opened_without_decision || 0)} opened without a decision`, href: '#/reviewed' })}
     </section>
     <div class="ov-grid">
-      <div>
-        <div class="panel">${panelHead(`Why cases are in ${lanes ? '“Check now”' : 'the highest group'}`, 'alert', '<span class="small muted">a case can have more than one reason</span>')}
-          ${table(['Reason', '', { label: 'Cases', num: true }], Object.entries(reasons).filter(([, v]) => v > 0).map(([k, v]) =>
-            `<tr><td><a href="#/cases?lane=${esc(k.toUpperCase())}&tier=A">${esc(S.labels.lanes[k.toUpperCase()] || k)}</a></td><td class="barcell">${bar(v, maxReason, 'red')}</td><td class="num">${n(v)}</td></tr>`), { empty: 'No case is in this group.' })}</div>
-        <div class="panel">${panelHead(`Where the ${lanes ? '“Check now”' : 'highest-priority'} cases are`, 'map', '<span class="small muted">top 10 States/UTs</span>')}
-          ${table(['State/UT', '', { label: 'Cases', num: true }, { label: 'Records', num: true }], states.map(s =>
-            `<tr><td><a href="#/worklist?state=${esc(s.state)}">${esc(s.label)}</a></td><td class="barcell">${bar(s.highest, maxState)}</td><td class="num">${n(s.highest)}</td><td class="num">${n(s.records)}</td></tr>`))}
-        </div>
-      </div>
-      <div>
-        <div class="panel">${panelHead('Decisions', 'check', '<a class="small" href="#/reviewed">All decisions</a>')}
-          ${table(['Decision', { label: 'Cases', num: true }], Object.entries(r.decisions).map(([k, v]) => `<tr><td>${decisionChip(k)}</td><td class="num">${n(v)}</td></tr>`))}
-          ${rev.rows.length ? `<h3>Most recent</h3>${table(['Case', 'By', 'When'], rev.rows.slice(0, 5).map(x =>
-            `<tr><td><a href="#/case/${encodeURIComponent(x.case_id)}">${esc(x.record_label)}</a><div>${decisionChip(x.decision)}</div></td><td>${esc(x.actor)}${x.actor_verified ? '' : ' <span class="small muted">(unverified)</span>'}</td><td class="small">${esc(when(x.decided_at_utc))}</td></tr>`))}` : ''}
-        </div>
-        <div class="panel violet">${panelHead('Strongest group alerts', 'group', '<a class="small" href="#/groups">All</a>')}
-          ${table(['FSU', 'What differs'], grp.rows.map(g => `<tr><td><a href="#/group/${encodeURIComponent(g.fsu)}?state=${encodeURIComponent(g.state)}">${esc(g.fsu)}</a><div class="small muted">${esc(g.location_label)}</div></td><td>${esc(g.patterns?.[0]?.text || g.strongest_statement || '')}</td></tr>`), { empty: 'No FSU-level group alert.' })}
-          <p class="small">Group alerts describe an FSU as a whole. They do not mean that any person's answers are wrong and never move a case in the list.</p></div>
-      </div>
+      <div class="panel">${panelHead(`Why cases are in ${listName}`, 'bars', `<span class="small muted">Total cases: <b class="ink">${n(now.records)}</b>${reasonTotal > now.records ? ' · a case can have more than one reason' : ''}</span>`)}
+        ${reasonRows ? `<div class="reasons">${reasonRows}</div>` : empty('No case is in this group.')}</div>
+      <div class="panel">${panelHead('Decisions', 'check', '<a class="small link-go" href="#/reviewed">All decisions</a>')}
+        <div class="dtiles">${decisionTiles}</div></div>
+      <div class="panel">${panelHead(`Where the ${lanes ? '“Check now”' : 'highest-priority'} cases are`, 'map', `<span class="small muted">Top ${n(states.length)} States/UTs · <a href="#/areas">All areas</a></span>`)}
+        ${states.length ? `<div class="hbar-head" aria-hidden="true"><span>State/UT</span><span></span><span>Cases</span><span>Records</span></div>${hbarList(states.map(s => ({ label: s.label, href: `#/worklist?state=${encodeURIComponent(s.state)}`, value: s.highest, sub: n(s.records) })))}` : empty('No case is in this group.')}</div>
+      <div class="panel">${panelHead('By interview period', 'trend', '<a class="small link-go" href="#/areas">Area trends</a>')}
+        ${hasTrend ? `<p class="panel-note">Cases per 1,000 records that could be checked, by when the interview took place.</p><div class="legend" id="ovTrendLegend"></div><div class="viz-box" id="ovTrend"></div>`
+          : empty(lanes ? 'This run has a single interview period, so there is nothing to compare over time.' : 'Available for current-method runs.')}</div>
+      <div class="panel violet">${panelHead('Strongest group alerts', 'group', '<a class="small link-go" href="#/groups">All</a>')}
+        ${table(['FSU', 'What differs'], grp.rows.map(g => `<tr><td><a href="#/group/${encodeURIComponent(g.fsu)}?state=${encodeURIComponent(g.state)}">${esc(g.fsu)}</a><div class="small muted">${esc(g.location_label)}</div></td><td>${esc(g.patterns?.[0]?.text || g.strongest_statement || '')}</td></tr>`), { empty: 'No FSU-level group alert.' })}
+        <p class="small">Group alerts describe an FSU as a whole. They do not mean that any person's answers are wrong and never move a case in the list.</p></div>
+      <div class="panel">${panelHead('Most recent decisions', 'clock', '<a class="small link-go" href="#/reviewed">All</a>')}
+        ${rev.rows.length ? table(['Case', 'By', 'When'], rev.rows.slice(0, 5).map(x =>
+          `<tr><td><a href="#/case/${encodeURIComponent(x.case_id)}">${esc(x.record_label)}</a><div>${decisionChip(x.decision)}</div></td><td>${esc(x.actor)}${x.actor_verified ? '' : ' <span class="small muted">(unverified)</span>'}</td><td class="small">${esc(when(x.decided_at_utc))}</td></tr>`)) : empty('No decision recorded yet.')}</div>
     </div>
     ${lanes ? `<details class="panel legend-panel"><summary>How to read the lists and the review budget</summary><div class="readguide">
       <div>${chip(S.labels.bands.CHECK_NOW, 'red')}<p>Review first: a questionnaire rule is not met, or the evidence is rare enough to fit this batch's review budget.</p></div>
@@ -222,6 +280,20 @@ async function overview() {
             { label: 'Observed alerts per 1,000 records', value: Number(burden.observed_value_alerts_per_1000).toFixed(2) },
             { label: 'Highest / median State “Check now” rate', value: burden.check_now_state_rate_max_over_median == null ? '—' : Number(burden.check_now_state_rate_max_over_median).toFixed(2) }])}
       <p class="small muted">${esc(burden.note || '')} This is a structural check, not a validation against confirmed errors.</p></details>` : ''}`;
+
+  if (hasTrend) {
+    const draw = () => {
+      const box = document.querySelector('#ovTrend');
+      if (!box) return;
+      const t = listTrend(cube.rows, cube.periods, {});
+      document.querySelector('#ovTrendLegend').innerHTML = trendLegend(t.series);
+      box.innerHTML = lineChart({ width: vizWidth(box), height: 220, periods: t.periods, series: t.series, indicator: '_per1000', zero: true,
+        label: `Cases per 1,000 checkable records by interview period. ${t.summary}`, tipFor: t.tipFor });
+      roving(box);
+    };
+    draw();
+    vizRedraw = draw;
+  }
 }
 
 /* ------------------------------------------------------------ worklist: by FSU and household */
@@ -235,7 +307,7 @@ async function worklist(_, params) {
   const states = Object.entries(S.labels.states).map(([c, l]) => `<option value="${c}" ${f.state === c ? 'selected' : ''}>${esc(l)}</option>`).join('');
   const tierName = { A: 'Check now', B: 'Check if time', AB: 'Check now and Check if time' }[f.tier] || f.tier;
   app.innerHTML = `${pageHead({ eyebrow: 'Review', title: 'Worklist by FSU',
-      lede: 'Cases are grouped by FSU and household, because verification is done per household visit or call. FSUs are in queue order.' })}
+      lede: 'Cases grouped by FSU and household, in queue order.' })}
     <form class="filters toolbar" id="wf">
       <label>List <select name="tier"><option value="A" ${f.tier === 'A' ? 'selected' : ''}>Check now</option><option value="B" ${f.tier === 'B' ? 'selected' : ''}>Check if time</option><option value="AB" ${f.tier === 'AB' ? 'selected' : ''}>Both</option></select></label>
       <label>State/UT <select name="state"><option value="">All</option>${states}</select></label>
@@ -272,7 +344,7 @@ async function cases(_, params) {
   const states = [['', 'All'], ...Object.entries(S.labels.states)];
   const pages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
   app.innerHTML = `${supersededBanner()}${pageHead({ eyebrow: 'Review', title: 'All cases',
-      lede: 'Every case of the selected run in queue order. Filter by list, reason, area or review status, or search for an FSU or record.' })}
+      lede: 'All cases in queue order. Filter by list, reason, area or review status, or search by FSU or record.' })}
     <form class="filters toolbar" id="cf">
       ${lanes ? `<label>List <select name="tier">${opt('tier', [['', 'All'], ['A', 'Check now'], ['B', 'Check if time'], ['NONE', 'Not flagged'], ['NOT_ASSESSABLE', 'No check possible']])}</select></label>
       <label>Reason <select name="lane">${opt('lane', [['', 'Any'], ...Object.entries(S.labels.lanes)])}</select></label>
@@ -421,7 +493,7 @@ async function groups(_, params) {
   const band = params.get('band') || 'ALERTS';
   const data = await api(url('/api/groups', { run: S.run, band, offset: (page - 1) * 50, limit: 50 }));
   app.innerHTML = `${supersededBanner()}${pageHead({ eyebrow: 'Context', title: 'Group alerts (FSU)',
-      lede: 'FSUs whose answers, taken together, differ clearly from comparable FSUs. Use them as background when reviewing cases — they are not findings about any person.' })}
+      lede: 'FSUs whose combined answers differ from comparable FSUs. Background for case review, not a finding about any person.' })}
     <details class="panel violet"><summary>How FSU group alerts are produced</summary>These checks compare each FSU with comparable FSUs of the same State/UT, sector and stratum: the mix of activity status (after allowing for age and sex), typical earnings and hours, age heaping, how much answers vary, interview durations, interview dates, response codes and near-identical answer sets across households. An FSU is an alert when its combined evidence passes a false-discovery-rate control across all FSUs. <b>An alert describes the FSU as a whole; it does not mean any person's answers are wrong, and it is not about an enumerator</b> (no enumerator code exists in the released data).</details>
     ${infoBox('<b>An alert describes the FSU as a whole.</b> It does not mean any person’s answers are wrong and never moves a case in the review list.', 'violet')}
     <form class="filters toolbar" id="gf"><label>Show <select name="band"><option value="ALERTS" ${band === 'ALERTS' ? 'selected' : ''}>FSUs with an alert</option><option value="HIGH" ${band === 'HIGH' ? 'selected' : ''}>Clear difference</option><option value="LOW" ${band === 'LOW' ? 'selected' : ''}>No notable difference</option></select></label><div class="actions"><button>Show</button></div></form>
@@ -478,6 +550,8 @@ function niceDomain(lo, hi, count = 5) {
 function tickFormat(indicator, step) {
   const u = INDICATOR_UNIT[indicator];
   if (u === 'share') return v => `${(v * 100).toFixed(step * 100 < 1 ? 1 : 0)}%`;
+  if (u === 'per1000') return v => v.toFixed(step < 1 ? 1 : 0);
+  if (u === 'count') return v => n(v);
   if (u === 'rupees') return v => (Math.abs(v) >= 1000 ? `₹${(v / 1000).toFixed(step < 1000 ? 1 : 0)}K` : `₹${Math.round(v)}`);
   return v => `${v.toFixed(step < 1 ? 1 : 0)} h`;
 }
@@ -542,13 +616,13 @@ function roving(root) {
 
 /* Line chart over periods with an optional ±1.96 × SE band per series, markers for unusual / expected / imprecise points,
    and a crosshair column per period that carries the tooltip for every series at that period. */
-function lineChart({ width: W, height: H = 280, periods, series, indicator, label, tipFor }) {
+function lineChart({ width: W, height: H = 280, periods, series, indicator, label, tipFor, zero = false }) {
   const m = { l: 58, r: 18, t: 14, b: 30 };
   const share = INDICATOR_UNIT[indicator] === 'share';
   const lo = v => Math.max(0, v), hi = v => (share ? Math.min(1, v) : v);
   const vals = series.flatMap(s => s.points.flatMap(p => (p.v == null ? [] : s.band && p.se != null ? [lo(p.v - 1.96 * p.se), hi(p.v + 1.96 * p.se)] : [p.v])));
   if (!vals.length) return empty('No value for this area and indicator.');
-  const dom = niceDomain(Math.max(0, Math.min(...vals)), Math.max(...vals), 5);
+  const dom = niceDomain(zero ? 0 : Math.max(0, Math.min(...vals)), Math.max(...vals), 5);
   const fmt = tickFormat(indicator, dom.step);
   const y = vscale(dom.d0, dom.d1, H - m.b, m.t);
   const k = periods.length;
@@ -674,12 +748,375 @@ function median(values) {
   return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null;
 }
 
+/* ------------------------------------------------------------ case analytics (Area trends: cases by area)
+ *
+ * Built from /api/case-areas: stored record counts by area x sector x interview period x list x reason set.  Every
+ * record is counted once; the only arithmetic is sums, shares, rates per 1,000 and a two-proportion comparison. */
+
+const LIST_BANDS = { A: ['CHECK_NOW'], B: ['CHECK_IF_TIME'], AB: ['CHECK_NOW', 'CHECK_IF_TIME'] };
+const LIST_NAME = { A: 'Check now', B: 'Check if time', AB: 'Check now or Check if time' };
+const LIST_TONE = { A: ['red', 'xcircle'], B: ['amber', 'clock'], AB: ['red', 'alert'] };
+const STATUS_LINE = { red: '#c0302b', amber: '#a86400' };
+// Rates from fewer records that could be checked are shown but never ranked or compared: they move too much by chance.
+const MIN_CHECKABLE = 1000;
+// A difference counts as clear at three standard errors (conservative, because cases cluster within FSUs).
+const CLEAR_Z = 3;
+const per1000 = (cases, base) => (base ? (cases / base) * 1000 : null);
+const fmtRate = v => (v == null ? '—' : Number(v).toFixed(1));
+function propZ(c1, n1, c2, n2) {
+  if (!n1 || !n2) return null;
+  const p = (c1 + c2) / (n1 + n2), se = Math.sqrt(p * (1 - p) * (1 / n1 + 1 / n2));
+  return se ? (c2 / n2 - c1 / n1) / se : null;
+}
+
+// Sum cube rows into groups (key(row) -> group).  Reason counts overlap when a case has several reasons.
+function caseAgg(rows, { list = 'A', reason = '', sector = '', key = () => '' } = {}) {
+  const bands = LIST_BANDS[list] || LIST_BANDS.A;
+  const out = new Map();
+  rows.forEach(r => {
+    if (sector && r.sector !== sector) return;
+    const k = key(r);
+    if (k == null) return;
+    if (!out.has(k)) out.set(k, { key: k, name: r.area_label, records: 0, checkable: 0, cases: 0, decided: 0, lanes: {} });
+    const g = out.get(k);
+    g.records += r.records;
+    if (r.band !== 'NOT_ASSESSABLE') g.checkable += r.records;
+    if (bands.includes(r.band) && (!reason || r.lanes.includes(reason))) {
+      g.cases += r.records; g.decided += r.decided;
+      r.lanes.forEach(l => { g.lanes[l] = (g.lanes[l] || 0) + r.records; });
+    }
+  });
+  out.forEach(g => { g.rate = per1000(g.cases, g.checkable); });
+  return out;
+}
+const total = (rows, f) => caseAgg(rows, f).get('') || { records: 0, checkable: 0, cases: 0, decided: 0, lanes: {}, rate: null };
+
+// Both lists over interview periods, as rates per 1,000 checkable records, for lineChart.
+function listTrend(rows, periods, { reason = '', sector = '' } = {}) {
+  const P = periods.map(p => [p.index, p.label]);
+  const per = list => caseAgg(rows, { list, reason, sector, key: r => r.period_index });
+  const mk = (m, name, color, dash) => ({ name, color, dash, endLabel: !dash,
+    points: P.map(([i]) => { const g = m.get(i); return g && g.checkable ? { v: g.rate, row: g } : { v: null }; }) });
+  const series = [mk(per('A'), LIST_NAME.A, STATUS_LINE.red, false), mk(per('B'), LIST_NAME.B, STATUS_LINE.amber, true)];
+  const tipFor = (pi, lbl) => tipHtml(lbl, series.map(s => { const p = s.points[P.findIndex(x => x[0] === pi)]; const g = p.row;
+    return { color: s.color, value: g ? `${fmtRate(p.v)} per 1,000` : '—', label: s.name, sub: g ? `${n(g.cases)} cases · ${n(g.checkable)} records could be checked` : 'no records' }; }));
+  const summary = series.map(s => `${s.name}: ${s.points.map((p, i) => `${P[i][1]} ${fmtRate(p.v)}`).join(', ')}`).join('. ');
+  return { periods: P, series, tipFor, summary };
+}
+const trendLegend = series => series.map(s => `<span><i class="${s.dash ? 'k-dash' : 'k-line'}" style="${s.dash ? `border-color:${s.color}` : `background:${s.color}`}"></i>${esc(s.name)}</span>`).join('');
+// First vs last interview period for one list: values and whether the difference is clear.
+function periodChange(rows, periods, f) {
+  const m = caseAgg(rows, { ...f, key: r => r.period_index });
+  const pts = periods.map(p => ({ ...p, g: m.get(p.index) })).filter(p => p.g && p.g.checkable);
+  if (pts.length < 2) return null;
+  const a = pts[0], b = pts[pts.length - 1];
+  return { a, b, z: propZ(a.g.cases, a.g.checkable, b.g.cases, b.g.checkable) };
+}
+const compareWord = z => (z == null || Math.abs(z) < CLEAR_Z ? 'close to' : z > 0 ? 'clearly above' : 'clearly below');
+
+function areaTabs(view) {
+  return `<div class="tabs" role="navigation" aria-label="Area trends views">
+    <a href="#/areas" ${view === 'cases' ? 'aria-current="page"' : ''}>${icon('map')}Cases by area</a>
+    <a href="#/areas?view=indicators" ${view === 'indicators' ? 'aria-current="page"' : ''}>${icon('trend')}Survey indicators</a></div>`;
+}
+
+async function areas(_, params) {
+  const view = params.get('view') || (params.get('indicator') || params.get('level') ? 'indicators' : 'cases');
+  return view === 'indicators' ? areaIndicators(_, params) : areaCases(params);
+}
+
+async function areaCases(params) {
+  crumbs(['Area trends']);
+  const head = `${pageHead({ eyebrow: 'Context', title: 'Area trends', lede: 'Where the cases needing attention are, why they are listed and how they change across interview periods.' })}${areaTabs('cases')}`;
+  const d = await api(url('/api/case-areas', { run: S.run }));
+  if (!d.available) { app.innerHTML = head + empty(d.reason || 'No case data for this run.'); return; }
+  if (d.method !== 'lanes') {
+    app.innerHTML = `${supersededBanner()}${head}${infoBox('Cases by area use the “Check now” and “Check if time” lists of current-method runs. Select a current-method survey round, or open <a href="#/areas?view=indicators">Survey indicators</a>.', 'accent')}`;
+    return;
+  }
+  const lanesPresent = Object.keys(S.labels.lanes).filter(l => d.rows.some(r => r.lanes.includes(l)));
+  const stateCodes = [...new Map(d.rows.map(r => [r.area, r.area_label])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const V = {
+    list: LIST_BANDS[params.get('list')] ? params.get('list') : 'A',
+    sector: ['1', '2'].includes(params.get('sector')) ? params.get('sector') : '',
+    reason: lanesPresent.includes(params.get('reason')) ? params.get('reason') : '',
+    state: stateCodes.some(([c]) => c === params.get('state')) ? params.get('state') : '',
+    measure: params.get('measure') === 'rate' ? 'rate' : 'cases', top: 15,
+  };
+  const districts = new Map();   // state code -> district rows (fetched on demand)
+  const stateName = code => (stateCodes.find(([c]) => c === code) || [, `State ${code}`])[1];
+  const scopeName = () => (V.state ? stateName(V.state) : 'All India');
+  const seg = (name, value, options) => `<div class="seg" data-seg="${name}">${options.map(([v, l]) => `<button type="button" data-v="${esc(v)}" aria-pressed="${v === value}">${esc(l)}</button>`).join('')}</div>`;
+
+  app.innerHTML = `${head}<div id="ac">
+    <div class="toolbar at-controls">
+      <div class="ctl" role="group" aria-label="List"><span aria-hidden="true">List</span>${seg('list', V.list, [['A', 'Check now'], ['B', 'Check if time'], ['AB', 'Both']])}</div>
+      <div class="ctl" role="group" aria-label="Sector"><span aria-hidden="true">Sector</span>${seg('sector', V.sector, [['', 'All'], ['1', 'Rural'], ['2', 'Urban']])}</div>
+      <label class="ctl">Reason <select class="field" id="acReason"><option value="">Any reason</option>${lanesPresent.map(l => `<option value="${esc(l)}">${esc(S.labels.lanes[l])}</option>`).join('')}</select></label>
+      <label class="ctl">Area <select class="field" id="acState"><option value="">All India</option>${stateCodes.map(([c, l]) => `<option value="${esc(c)}">${esc(l)}</option>`).join('')}</select></label>
+      <button type="button" class="secondary" id="acReset">Reset</button>
+    </div>
+    <div class="scope" id="acScope"></div>
+    <section class="stats area-stats" id="acStats" aria-label="Headline figures"></section>
+    <section class="panel insights" aria-labelledby="acInsH"><div class="panel-head"><h2 id="acInsH">${icon('spark')}What the data shows</h2><span class="small muted" id="acInsSub"></span></div><ul id="acInsights"></ul></section>
+    <div class="at-grid">
+      <div class="panel">${panelHead('Where the cases are', 'map', `<span id="acMeasure">${seg('measure', V.measure, [['cases', 'Number of cases'], ['rate', 'Rate per 1,000']])}</span>`)}
+        <p class="panel-note" id="acRankNote"></p>
+        <div class="viz-box tall" id="acRank"></div>
+        <div class="rank-foot"><span class="small muted" id="acRankCount"></span><span id="acTop">${seg('top', String(V.top), [['15', 'Top 15'], ['30', 'Top 30'], ['0', 'All']])}</span></div></div>
+      <div>
+        <div class="panel">${panelHead('Why cases are listed', 'bars', '<span class="small muted" id="acReasonSub"></span>')}<div id="acReasons"></div></div>
+        <div class="panel">${panelHead('Rural and urban', 'group', '<span class="small muted">per 1,000 checkable records</span>')}<div id="acSectors"></div></div>
+      </div>
+    </div>
+    <div class="at-grid even">
+      <div class="panel">${panelHead('Across interview periods', 'trend', '<span class="small muted" id="acTrendSub"></span>')}
+        <p class="panel-note">Cases per 1,000 records that could be checked, by when the interview took place. Interview periods of this survey round; this is not review progress.</p>
+        <div class="legend" id="acTrendLegend"></div><div class="viz-box" id="acTrend"></div><p class="small" id="acTrendText" style="margin:10px 0 0"></p></div>
+      <div class="panel">${panelHead('Other survey rounds', 'calendar', '<span class="small muted">current method only</span>')}<div id="acRounds"></div></div>
+    </div>
+    <div class="panel">${panelHead('All areas', 'list', '<span class="small muted" id="acTableSub"></span>')}<div id="acTable"></div></div>
+    <details class="panel"><summary>What these figures mean</summary><ul class="checks small">
+      <li><b>Records</b> are the person records in this survey round. <b>Records that could be checked</b> exclude those with “No check possible”; every rate uses them as the base.</li>
+      <li><b>Cases</b> are records in the selected list. Each record is counted once, even when it has more than one reason, so reason counts can add up to more than the number of cases.</li>
+      <li><b>Rate per 1,000</b> = cases ÷ records that could be checked × 1,000. A high count can simply mean many records; compare rates to see where cases are more concentrated.</li>
+      <li>Areas with fewer than ${n(MIN_CHECKABLE)} records that could be checked are not ranked by rate. A difference is called <i>clear</i> only when it exceeds three standard errors of a two-proportion comparison; this is conservative because cases cluster within FSUs.</li>
+      <li>“Check now” is limited by the review budget (${((d.budget.review_budget_share || 0) * 100).toFixed(1)}% of records, ${n(d.budget.budget_cases)} places in this round), so its size depends on the budget as well as on the data. Being listed means unusual, not wrong.</li></ul></details>
+  </div>`;
+  const root = document.querySelector('#ac');
+  const $ = sel => root.querySelector(sel);
+  $('#acReason').value = V.reason;
+  $('#acState').value = V.state;
+
+  const filt = () => ({ list: V.list, reason: V.reason, sector: V.sector });
+  const baseRows = () => (V.state ? d.rows.filter(r => r.area === V.state) : d.rows);
+  const areaRows = () => (V.state ? districts.get(V.state) : d.rows);
+  const listLabel = () => `“${LIST_NAME[V.list]}”`;
+  const syncUrl = () => {
+    const q = new URLSearchParams(Object.entries({ list: V.list === 'A' ? '' : V.list, sector: V.sector, reason: V.reason, state: V.state, measure: V.measure === 'cases' ? '' : 'rate' }).filter(([, v]) => v));
+    history.replaceState(null, '', `#/areas${q.toString() ? `?${q}` : ''}`);
+    $('#acReset').disabled = !q.toString();
+  };
+
+  function drawScope() {
+    const tier = V.list;
+    const caseHref = V.list === 'AB' ? '' : `#/cases?${new URLSearchParams(Object.entries({ tier, state: V.state, sector: V.sector, lane: V.reason }).filter(([, v]) => v))}`;
+    const wlHref = `#/worklist?${new URLSearchParams(Object.entries({ tier, state: V.state }).filter(([, v]) => v))}`;
+    const parts = [V.state ? `<span class="scope-chip">${icon('map')}${esc(stateName(V.state))}<button type="button" data-clear="state" aria-label="Back to All India">×</button></span>` : `<span class="scope-chip plain">${icon('map')}All India</span>`,
+      V.sector ? `<span class="scope-chip">${esc(sectorName(V.sector))}<button type="button" data-clear="sector" aria-label="Show both sectors">×</button></span>` : '',
+      V.reason ? `<span class="scope-chip">${esc(S.labels.lanes[V.reason])}<button type="button" data-clear="reason" aria-label="Show every reason">×</button></span>` : ''];
+    $('#acScope').innerHTML = `<div class="scope-l"><span class="small muted">Showing ${esc(listLabel())} cases for</span>${parts.join('')}</div>
+      <div class="scope-r"><a class="btn secondary" href="${wlHref}">${icon('list')}Open worklist</a>${caseHref ? `<a class="btn secondary" href="${caseHref}">All matching cases</a>` : ''}</div>`;
+  }
+
+  function drawStats() {
+    const t = total(baseRows(), filt());
+    const areaMap = areaRows() ? caseAgg(areaRows(), { ...filt(), key: r => r.area }) : new Map();
+    const list = [...areaMap.values()];
+    const top = list.slice().sort((a, b) => b.cases - a.cases)[0];
+    const eligible = list.filter(a => a.checkable >= MIN_CHECKABLE);
+    const topRate = eligible.slice().sort((a, b) => b.rate - a.rate)[0];
+    const [tone, ic] = LIST_TONE[V.list];
+    const level = V.state ? 'district' : 'State/UT';
+    $('#acStats').innerHTML = [
+      statCard({ tone: 'blue', ic: 'db', label: 'Records that could be checked', value: n(t.checkable), sub: `of ${n(t.records)} records · ${n(t.records - t.checkable)} with no check possible` }),
+      statCard({ tone, ic, label: `${LIST_NAME[V.list]} cases`, value: n(t.cases), sub: `${fmtRate(t.rate)} per 1,000 checkable records` }),
+      statCard({ tone: 'green', ic: 'check', label: 'Decided', value: t.cases ? pct(t.decided, t.cases) : '—', sub: `${n(t.decided)} of ${n(t.cases)} cases` }),
+      statCard({ ic: 'map', label: `Most cases (${level})`, value: top && top.cases ? `<span class="stat-name">${esc(top.name)}</span>` : '—', sub: top && top.cases ? `${n(top.cases)} cases · ${pct(top.cases, t.cases)} of ${esc(scopeName())}` : 'No case in this selection' }),
+      statCard({ ic: 'trend', label: `Highest rate (${level})`, value: topRate && topRate.cases ? `<span class="stat-name">${esc(topRate.name)}</span>` : '—',
+        sub: topRate && topRate.cases ? `${fmtRate(topRate.rate)} per 1,000 · ${esc(scopeName())} ${fmtRate(t.rate)}` : eligible.length ? 'No case in this selection' : `No ${level} has ${n(MIN_CHECKABLE)} checkable records`,
+        title: `Among areas with at least ${n(MIN_CHECKABLE)} records that could be checked` }),
+    ].join('');
+  }
+
+  function drawInsights() {
+    const rows = baseRows(), f = filt(), t = total(rows, f), out = [];
+    const scope = esc(scopeName());
+    const ln = esc(listLabel());
+    if (!t.cases) { $('#acInsights').innerHTML = `<li>No ${ln} case matches this selection.</li>`; $('#acInsSub').textContent = ''; return; }
+    const areaMap = areaRows() ? caseAgg(areaRows(), { ...f, key: r => r.area }) : new Map();
+    const list = [...areaMap.values()];
+    const level = V.state ? 'district' : 'State/UT';
+    const top = list.slice().sort((a, b) => b.cases - a.cases)[0];
+    if (top && top.cases && list.length > 1) {
+      let s = `<b>${esc(top.name)}</b> has the most ${ln} cases: ${n(top.cases)}, or ${pct(top.cases, t.cases)} of ${scope}.`;
+      if (top.checkable >= MIN_CHECKABLE) {
+        const z = propZ(t.cases - top.cases, t.checkable - top.checkable, top.cases, top.checkable);
+        s += ` Its rate, ${fmtRate(top.rate)} per 1,000 checkable records, is ${compareWord(z)} the rest of ${scope} (${fmtRate(per1000(t.cases - top.cases, t.checkable - top.checkable))}).`;
+      }
+      out.push(s);
+    }
+    const eligible = list.filter(a => a.checkable >= MIN_CHECKABLE);
+    if (eligible.length > 1) {
+      const hi = eligible.slice().sort((a, b) => b.rate - a.rate)[0];
+      if (hi.key !== top?.key && hi.cases) {
+        const z = propZ(t.cases - hi.cases, t.checkable - hi.checkable, hi.cases, hi.checkable);
+        out.push(z != null && z >= CLEAR_Z
+          ? `<b>${esc(hi.name)}</b> has the highest concentration: ${fmtRate(hi.rate)} cases per 1,000 checkable records, clearly above the rest of ${scope} (${fmtRate(per1000(t.cases - hi.cases, t.checkable - hi.checkable))}). It deserves a closer look.`
+          : `<b>${esc(hi.name)}</b> has the highest rate (${fmtRate(hi.rate)} per 1,000), but it is not clearly different from the rest of ${scope}.`);
+      }
+      const clearHigh = eligible.filter(a => { const z = propZ(t.cases - a.cases, t.checkable - a.checkable, a.cases, a.checkable); return z != null && z >= CLEAR_Z; });
+      if (clearHigh.length) out.push(`${n(clearHigh.length)} ${clearHigh.length === 1 ? level : `${level === 'district' ? 'districts' : 'States/UTs'}`} ${clearHigh.length === 1 ? 'has' : 'have'} a rate clearly above the rest of ${scope}: ${clearHigh.sort((a, b) => b.rate - a.rate).slice(0, 5).map(a => esc(a.name)).join(', ')}${clearHigh.length > 5 ? ' and others' : ''}.`);
+    } else if (list.length > 1) {
+      out.push(`Rates are not compared between ${V.state ? 'districts' : 'areas'}: ${eligible.length ? 'only one has' : 'none has'} at least ${n(MIN_CHECKABLE)} records that could be checked, so counts are shown instead.`);
+    }
+    const reasons = Object.entries(t.lanes).sort((a, b) => b[1] - a[1]);
+    if (reasons.length && !V.reason) {
+      const [code, c] = reasons[0];
+      out.push(c / t.cases > 0.5 ? `Most of these cases (${pct(c, t.cases)}) are listed for <b>${esc(S.labels.lanes[code] || code)}</b>.` : `The most common reason is <b>${esc(S.labels.lanes[code] || code)}</b> (${pct(c, t.cases)} of cases).`);
+    }
+    const ch = periodChange(rows, d.periods, f);
+    if (ch) {
+      const clear = ch.z != null && Math.abs(ch.z) >= CLEAR_Z;
+      out.push(clear ? `The ${ln} rate ${ch.z < 0 ? 'fell' : 'rose'} from ${fmtRate(ch.a.g.rate)} per 1,000 in ${esc(ch.a.label)} to ${fmtRate(ch.b.g.rate)} in ${esc(ch.b.label)}.`
+        : `The ${ln} rate was ${fmtRate(ch.a.g.rate)} per 1,000 in ${esc(ch.a.label)} and ${fmtRate(ch.b.g.rate)} in ${esc(ch.b.label)}; the difference is too small to call a trend.`);
+    }
+    if (!V.sector) {
+      const sec = caseAgg(rows, { ...f, key: r => r.sector });
+      const ru = sec.get('1'), ur = sec.get('2');
+      if (ru && ur && ru.checkable >= MIN_CHECKABLE && ur.checkable >= MIN_CHECKABLE) {
+        const z = propZ(ur.cases, ur.checkable, ru.cases, ru.checkable);
+        out.push(z != null && Math.abs(z) >= CLEAR_Z ? `Rural records have a ${z > 0 ? 'higher' : 'lower'} rate (${fmtRate(ru.rate)} per 1,000) than urban records (${fmtRate(ur.rate)}).`
+          : `Rural and urban rates are similar (${fmtRate(ru.rate)} and ${fmtRate(ur.rate)} per 1,000).`);
+      }
+    }
+    $('#acInsights').innerHTML = out.map(s => `<li>${s}</li>`).join('');
+    $('#acInsSub').textContent = `${LIST_NAME[V.list]} · ${scopeName()}${V.sector ? ` · ${sectorName(V.sector)}` : ''}${V.reason ? ` · ${S.labels.lanes[V.reason]}` : ''}`;
+  }
+
+  function drawRank() {
+    const box = $('#acRank');
+    const rows = areaRows();
+    const level = V.state ? 'district' : 'State/UT';
+    if (!rows) { box.innerHTML = '<div class="loading">Loading districts…</div>'; return; }
+    const t = total(baseRows(), filt());
+    const all = [...caseAgg(rows, { ...filt(), key: r => r.area }).values()];
+    const rate = V.measure === 'rate';
+    const pool = rate ? all.filter(a => a.checkable >= MIN_CHECKABLE) : all.filter(a => a.cases > 0);
+    pool.sort((a, b) => (rate ? b.rate - a.rate : b.cases - a.cases) || a.name.localeCompare(b.name));
+    const shown = V.top ? pool.slice(0, V.top) : pool;
+    const left = all.length - all.filter(a => a.checkable >= MIN_CHECKABLE).length;
+    $('#acRankNote').innerHTML = rate
+      ? `${esc(LIST_NAME[V.list])} cases per 1,000 records that could be checked. The dashed line is ${esc(scopeName())}.${left ? ` ${n(left)} ${left === 1 ? 'area' : 'areas'} with fewer than ${n(MIN_CHECKABLE)} checkable records ${left === 1 ? 'is' : 'are'} left out.` : ''}`
+      : `Number of ${esc(LIST_NAME[V.list])} cases. Larger areas have more records, so compare rates as well.`;
+    $('#acRankCount').textContent = `${n(shown.length)} of ${n(pool.length)} ${level === 'district' ? 'districts' : 'States/UTs'}${V.state ? '' : ' · select one to see its districts'}`;
+    box.innerHTML = shown.length ? rankChart({ width: vizWidth(box), indicator: rate ? '_per1000' : '_cases', ref: rate && t.rate != null ? { v: t.rate, label: scopeName() } : null,
+      label: `${LIST_NAME[V.list]} cases by ${level}, ${rate ? 'rate per 1,000 checkable records' : 'number of cases'}, ${scopeName()}. Exact values are in the All areas table.`,
+      items: shown.map(a => ({ key: V.state ? '' : a.key, name: a.name, v: rate ? a.rate : a.cases, focus: false,
+        tip: tipHtml(a.name, [{ value: `${n(a.cases)} cases`, label: LIST_NAME[V.list], sub: `${fmtRate(a.rate)} per 1,000 · ${n(a.checkable)} records could be checked · ${n(a.decided)} decided${a.checkable < MIN_CHECKABLE ? ' · few records: rate unstable' : ''}` }]) })) })
+      : empty(rate ? `No ${level} has ${n(MIN_CHECKABLE)} records that could be checked.` : 'No case in this selection.');
+    roving(box);
+  }
+
+  function drawReasons() {
+    const t = total(baseRows(), { ...filt(), reason: '' });
+    const entries = Object.entries(t.lanes).sort((a, b) => b[1] - a[1]);
+    const sum = entries.reduce((s, [, v]) => s + v, 0);
+    $('#acReasonSub').textContent = t.cases ? `${n(t.cases)} ${LIST_NAME[V.list]} cases${sum > t.cases ? ' · a case can have more than one reason' : ''}` : '';
+    $('#acReasons').innerHTML = entries.length ? `<div class="reasons">${entries.map(([code, c]) => `<button type="button" class="reason-row ${V.reason === code ? 'on' : ''}" data-reason="${esc(code)}" aria-pressed="${V.reason === code}">
+        <span class="reason-ic">${icon(reasonIcon(code))}</span><span class="reason-txt"><b>${esc(S.labels.lanes[code] || code)}</b>${REASON_HELP[code] ? `<span>${esc(REASON_HELP[code])}</span>` : ''}</span>
+        <span class="reason-num"><b>${n(c)}</b> ${c === 1 ? 'case' : 'cases'}<span>${pct(c, t.cases)}</span></span><span class="reason-bar">${bar(c, t.cases, V.list === 'B' ? 'amber' : 'red')}</span></button>`).join('')}</div>
+      <p class="small muted" style="margin:8px 0 0">${V.reason ? 'Select the reason again to show every reason.' : 'Select a reason to filter the page.'}</p>` : empty('No case in this selection.');
+  }
+
+  function drawSectors() {
+    const sec = caseAgg(baseRows(), { ...filt(), sector: '', key: r => r.sector });
+    const items = ['1', '2'].map(s => sec.get(s)).filter(Boolean);
+    const max = Math.max(1e-9, ...items.map(g => g.rate || 0));
+    $('#acSectors').innerHTML = items.length ? `<div class="hbars">${items.map(g => `<button type="button" class="hbar ${V.sector === g.key ? 'on' : ''}" data-sector="${esc(g.key)}" aria-pressed="${V.sector === g.key}">
+        <span class="hbar-name">${esc(sectorName(g.key))}</span><span class="hbar-track">${g.checkable >= MIN_CHECKABLE ? bar(g.rate || 0, max) : '<span class="small muted">few records</span>'}</span>
+        <span class="hbar-val">${fmtRate(g.rate)}</span><span class="hbar-sub">${n(g.cases)} of ${n(g.checkable)}</span></button>`).join('')}</div>
+      <p class="small muted" style="margin:8px 0 0">Rate per 1,000 · cases of records that could be checked. Select a sector to filter the page.</p>` : empty('No record in this selection.');
+  }
+
+  function drawTrend() {
+    const box = $('#acTrend');
+    if (d.periods.length < 2) { box.innerHTML = empty('This survey round has a single interview period.'); $('#acTrendText').textContent = ''; return; }
+    const t = listTrend(baseRows(), d.periods, { reason: V.reason, sector: V.sector });
+    $('#acTrendLegend').innerHTML = trendLegend(t.series);
+    $('#acTrendSub').textContent = `${d.periods[0].label} – ${d.periods[d.periods.length - 1].label}`;
+    box.innerHTML = lineChart({ width: vizWidth(box), height: window.innerWidth < 720 ? 220 : 260, periods: t.periods, series: t.series, indicator: '_per1000', zero: true,
+      label: `Cases per 1,000 checkable records by interview period, ${scopeName()}. ${t.summary}`, tipFor: t.tipFor });
+    roving(box);
+    const lines = ['A', 'B'].map(l => { const ch = periodChange(baseRows(), d.periods, { ...filt(), list: l }); if (!ch) return '';
+      const clear = ch.z != null && Math.abs(ch.z) >= CLEAR_Z;
+      return `<b>${esc(LIST_NAME[l])}:</b> ${fmtRate(ch.a.g.rate)} → ${fmtRate(ch.b.g.rate)} per 1,000 (${clear ? (ch.z < 0 ? 'a clear fall' : 'a clear rise') : 'no clear change'}).`; }).filter(Boolean);
+    $('#acTrendText').innerHTML = lines.join(' ');
+  }
+
+  function drawRounds() {
+    const rounds = d.rounds || [];
+    if (rounds.length < 2) { $('#acRounds').innerHTML = empty('Only this survey round is available on this instance.'); return; }
+    $('#acRounds').innerHTML = `${table(['Survey round', { label: 'Records', num: true }, { label: 'Check now', num: true }, { label: 'Budget used', num: true }, { label: 'Per 1,000', num: true }], rounds.map(r => {
+      const checkable = r.records - r.not_assessable;
+      return `<tr class="${r.run === d.run ? 'current' : ''}"><td><b>${esc(roundName(r.release))}</b>${r.run === d.run ? ' <span class="chip blue">selected</span>' : ''}<div class="small muted">${r.periods?.length ? `${esc(r.periods[0])} – ${esc(r.periods[r.periods.length - 1])}` : ''}</div></td>
+        <td class="num">${n(r.records)}</td><td class="num">${n(r.check_now)}</td><td class="num">${r.budget_cases ? pct(r.check_now, r.budget_cases) : '—'}</td><td class="num">${fmtRate(per1000(r.check_now, checkable))}</td></tr>`; }))}
+      <p class="small muted" style="margin:10px 0 0">“Budget used” is “Check now” as a share of the review budget; a lower share means less evidence was rare enough to list. Per 1,000 uses records that could be checked. Rounds whose interview periods overlap share records, so they are not independent.</p>`;
+  }
+
+  function drawTable() {
+    const rows = areaRows();
+    const level = V.state ? 'District' : 'State/UT';
+    if (!rows) { $('#acTable').innerHTML = '<div class="loading">Loading districts…</div>'; return; }
+    const all = [...caseAgg(rows, { ...filt(), key: r => r.area }).values()].sort((a, b) => b.cases - a.cases || a.name.localeCompare(b.name, 'en', { numeric: true }));
+    $('#acTableSub').textContent = `${n(all.length)} ${V.state ? 'districts' : 'States/UTs'} · ${scopeName()}`;
+    const href = a => `#/worklist?${new URLSearchParams(Object.entries({ tier: V.list, state: V.state || a.key, district: V.state ? a.key : '' }).filter(([, v]) => v))}`;
+    $('#acTable').innerHTML = table([level, { label: 'Records that could be checked', num: true }, { label: `${LIST_NAME[V.list]} cases`, num: true }, { label: 'Per 1,000', num: true }, 'Main reason', { label: 'Decided', num: true }, ''],
+      all.map(a => { const main = Object.entries(a.lanes).sort((x, y) => y[1] - x[1])[0];
+        return `<tr><td>${V.state ? esc(a.name) : `<button type="button" class="linkish" data-focus="${esc(a.key)}">${esc(a.name)}</button>`}</td><td class="num">${n(a.checkable)}</td><td class="num"><b>${n(a.cases)}</b></td>
+          <td class="num">${fmtRate(a.rate)}${a.checkable < MIN_CHECKABLE ? ' <span class="chip" title="Fewer than 1,000 records could be checked: the rate is unstable">few records</span>' : ''}</td>
+          <td>${main ? esc(S.labels.lanes[main[0]] || main[0]) : '<span class="muted">—</span>'}</td><td class="num">${a.cases ? pct(a.decided, a.cases) : '—'}</td>
+          <td class="num">${a.cases ? `<a href="${href(a)}">Worklist</a>` : ''}</td></tr>`; }), { empty: 'No area in this selection.' });
+  }
+
+  function drawAll() { syncUrl(); drawScope(); drawStats(); drawInsights(); drawRank(); drawReasons(); drawSectors(); drawTrend(); drawRounds(); drawTable(); }
+  async function setState(code) {
+    V.state = code; $('#acState').value = code;
+    if (code && !districts.has(code)) {
+      drawAll();
+      try { const r = await api(url('/api/case-areas', { run: S.run, state: code })); districts.set(code, r.available ? r.rows : []); }
+      catch (e) { districts.set(code, []); notice(e.message, 'error'); }
+      if (V.state !== code || !document.body.contains(root)) return;
+    }
+    drawAll();
+  }
+  root.addEventListener('click', e => {
+    const t = e.target.closest('button, [data-focus]');
+    if (!t || !root.contains(t)) return;
+    const segEl = t.closest('[data-seg]');
+    if (segEl && t.dataset.v != null) {
+      const k = segEl.dataset.seg; V[k] = k === 'top' ? Number(t.dataset.v) : t.dataset.v;
+      segEl.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === t)));
+      if (k === 'top' || k === 'measure') { syncUrl(); drawRank(); } else drawAll();
+      return;
+    }
+    if (t.dataset.reason) { V.reason = V.reason === t.dataset.reason ? '' : t.dataset.reason; $('#acReason').value = V.reason; drawAll(); }
+    else if (t.dataset.sector != null) { V.sector = V.sector === t.dataset.sector ? '' : t.dataset.sector; root.querySelectorAll('[data-seg="sector"] button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === V.sector))); drawAll(); }
+    else if (t.dataset.clear) {
+      if (t.dataset.clear === 'state') { setState(''); return; }
+      V[t.dataset.clear] = '';
+      if (t.dataset.clear === 'reason') $('#acReason').value = '';
+      root.querySelectorAll(`[data-seg="${t.dataset.clear}"] button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === '')));
+      drawAll();
+    } else if (t.id === 'acReset') { go('#/areas'); }
+    else if (t.dataset.focus) { setState(t.dataset.focus); window.scrollTo({ top: 0 }); }
+  });
+  root.addEventListener('keydown', e => { const t = e.target.closest?.('g[data-focus]'); if (t && t.dataset.focus && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setState(t.dataset.focus); } });
+  $('#acReason').onchange = e => { V.reason = e.target.value; drawAll(); };
+  $('#acState').onchange = e => setState(e.target.value);
+  vizRedraw = () => { if (document.body.contains(root)) { drawRank(); drawTrend(); } };
+  await setState(V.state);
+}
+
 /* ------------------------------------------------------------ areas */
 
-const INDICATOR_UNIT = { lfpr_cws_15plus: 'share', wpr_cws_15plus: 'share', ur_cws_15plus: 'share', median_salaried_earnings: 'rupees', mean_day7_hours_workers: 'hours' };
+const INDICATOR_UNIT = { lfpr_cws_15plus: 'share', wpr_cws_15plus: 'share', ur_cws_15plus: 'share', median_salaried_earnings: 'rupees', mean_day7_hours_workers: 'hours',
+  _cases: 'count', _per1000: 'per1000' };   // the last two are the case counts and rates of Cases by area
 function indicatorValue(indicator, v) {
   if (v == null) return '—';
   const u = INDICATOR_UNIT[indicator];
+  if (u === 'count') return n(Math.round(v));
+  if (u === 'per1000') return Number(v).toFixed(1);
   return u === 'share' ? `${(v * 100).toFixed(1)}%` : u === 'rupees' ? money(v) : `${Number(v).toFixed(1)} h`;
 }
 // A change of a share is in percentage points; rupees and hours keep their unit.
@@ -708,7 +1145,7 @@ function precisionIssues(r) {
 const precisionNote = `Low precision when any of: no design-based standard error, standard error above ${PRECISION.rse * 100}% of the value, design effect above ${PRECISION.deff}, or fewer than ${PRECISION.persons} persons aged 15+. Read such estimates as indicative only.`;
 const LEVEL_NAME = { national: 'National', state: 'State/UT', district: 'District' };
 
-async function areas(_, params) {
+async function areaIndicators(_, params) {
   crumbs(['Area trends']);
   const level = params.get('level') || 'state';
   const indicator = params.get('indicator') || 'ur_cws_15plus';
@@ -716,7 +1153,7 @@ async function areas(_, params) {
   const [data, nat] = await Promise.all([api(url('/api/aggregates', { run: S.run, level, indicator, limit: 5000 })),
     level === 'national' ? null : api(url('/api/aggregates', { run: S.run, level: 'national', indicator, limit: 5000 })).catch(() => null)]);
   const head = pageHead({ eyebrow: 'Context', title: 'Area trends',
-    lede: 'Weighted current-weekly-status indicators from first-visit records, and the period-on-period changes that stand out. Screening values, not official PLFS estimates.' });
+    lede: 'Weighted current-weekly-status indicators from first-visit records, with notable period-on-period changes. Screening values, not official PLFS estimates.' }) + areaTabs('indicators');
   if (!data.available) { app.innerHTML = head + empty('No historical run is attached to this survey round.'); return; }
 
   /* ---- index the rows: area = place (State/UT, district) × sector; one row per period */
@@ -754,7 +1191,7 @@ async function areas(_, params) {
   const multiSector = sectors.length > 1;
   app.innerHTML = `${head}<div id="at">
     <div class="toolbar at-controls">
-      <form class="filters" id="af"><label>Level <select name="level">${['national', 'state', 'district'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select></label>
+      <form class="filters" id="af"><input type="hidden" name="view" value="indicators"><label>Level <select name="level">${['national', 'state', 'district'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select></label>
         <label>Indicator <select name="indicator">${data.indicators.map(i => `<option value="${esc(i.indicator)}" ${i.indicator === indicator ? 'selected' : ''}>${esc(i.indicator_label)}</option>`).join('')}</select></label><div class="actions"><button>Show</button></div></form>
       <span class="sep" aria-hidden="true"></span>
       <div class="filters">
@@ -904,7 +1341,7 @@ async function areas(_, params) {
       const x0 = x(a.previous_value), x1 = x(a.value);
       return `<svg class="dumb" width="140" height="16" viewBox="0 0 140 16" aria-hidden="true"><line class="d-line" x1="${x0.toFixed(1)}" x2="${x1.toFixed(1)}" y1="8" y2="8"/><circle class="d-prev" cx="${x0.toFixed(1)}" cy="8" r="4.5"/><circle class="d-now" cx="${x1.toFixed(1)}" cy="8" r="5"/></svg>`;
     };
-    const trendHref = a => `#/areas?${new URLSearchParams({ level: a.level, indicator: a.indicator, area: placeKey(a), sector: a.sector })}`;
+    const trendHref = a => `#/areas?${new URLSearchParams({ view: 'indicators', level: a.level, indicator: a.indicator, area: placeKey(a), sector: a.sector })}`;
     board.innerHTML = table(['Area', 'Indicator · period', 'Before → Now', { label: 'Change ÷ SE', num: true }], rows.slice(0, 100).map(a => {
       const z = a.change_over_design_se;
       return `<tr><td><a href="${trendHref(a)}" title="Show this area's trend">${esc(a.area_label)}</a><div class="small muted">${esc(LEVEL_NAME[a.level] || a.level)}${a.expected_change_known_event ? ` ${chip('Expected (known event)', 'blue')}` : ''}</div></td>
@@ -993,7 +1430,7 @@ async function areas(_, params) {
   $('#atSm')?.addEventListener('change', e => { V.sm = e.target.value; drawRank(); });
   let qTimer;
   $('#atQ')?.addEventListener('input', e => { clearTimeout(qTimer); qTimer = setTimeout(() => { V.q = e.target.value; drawRank(); drawTable(); }, 160); });
-  vizRedraw = () => { if (location.hash.startsWith('#/areas') && document.body.contains(root)) { drawTrend(); drawSpread(); if (level !== 'national') drawRank(); } };
+  vizRedraw = () => { if (document.body.contains(root)) { drawTrend(); drawSpread(); if (level !== 'national') drawRank(); } };
 }
 
 // Share of each decision among the rows shown (counts of the stored decisions; nothing else).
@@ -1012,7 +1449,7 @@ async function reviewed(_, params) {
   const decision = params.get('decision') || '';
   const data = await api(url('/api/reviews', { run: S.run, decision }));
   app.innerHTML = `${pageHead({ eyebrow: 'Audit trail', title: 'Decisions',
-      lede: 'Every decision recorded for the selected run, newest first. Decisions are appended to a hash-chained audit trail and never overwrite survey data.' })}
+      lede: 'Decisions recorded for the selected run, newest first.' })}
     <form class="filters toolbar" id="rf"><label>Decision <select name="decision"><option value="">All</option>${Object.entries(S.labels.decisions).filter(([k]) => k !== 'UNREVIEWED').map(([k, v]) => `<option value="${k}" ${k === decision ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label><div class="actions"><button>Show</button></div></form>
     ${!decision && data.rows.length ? decisionMix(data.rows) : ''}
     <div class="result-head"><span class="count">${n(data.rows.length)} ${data.rows.length === 1 ? 'decision' : 'decisions'}</span></div>
@@ -1046,7 +1483,7 @@ async function technical() {
     api(url('/api/feedback', { run: S.run })).catch(() => ({ available: false })), api(url('/api/audit/verify', { run: S.run })), api('/api/evaluation')]);
   const m = summary.metadata, rep = summary.report;
   app.innerHTML = `${pageHead({ eyebrow: 'For technical staff', title: 'Technical reference',
-      lede: 'Run provenance, audit-trail integrity, questionnaire rules, evaluation results and a single-record check. Not needed for everyday review.' })}
+      lede: 'Run provenance, audit-trail integrity, questionnaire rules, evaluation results and the single-record check.' })}
     <div class="panel"><h2>Run and method</h2>${kv([{ label: 'Fusion run', value: summary.run }, { label: 'Method', value: m.fusion_version },
       { label: 'Preparation run', value: m.input_preprocessing_run_id }, ...Object.entries(m.source_runs || {}).map(([k, v]) => ({ label: `${k} run`, value: v }))])}
       ${tech(m.parameters, 'Parameters')}${tech(rep, 'Run report')}</div>
@@ -1100,7 +1537,7 @@ async function batch() {
   const active = list.jobs.find(j => ['STARTING', 'RUNNING'].includes(j.status));
   const step = (k, title) => `<div class="panel-head"><h2><span class="step-num">${k}</span>${esc(title)}</h2></div>`;
   app.innerHTML = `${pageHead({ eyebrow: 'Operations', title: 'Batch validation',
-      lede: 'Runs every validation check on a prepared survey delivery and produces a new review list. Earlier runs and their decisions are kept unchanged.' })}
+      lede: 'Run all validation checks on a prepared survey delivery to produce a new review list.' })}
     ${active ? `<div class="callout"><div class="txt"><b>A batch is running: ${esc(roundName(active.release))} · ${esc(active.label)}</b><span>This page refreshes every 5 seconds. You can leave and come back.</span></div><a class="btn lg" href="#/batch/${active.job_id}">Follow progress</a></div>` : ''}
     <div class="panel">${step(1, 'Survey data available on this server')}
       ${table(['Survey round', 'Data file', { label: 'Persons', num: true }, 'Compared with', 'Runs already made', 'Available'], info.inputs.map(i =>
@@ -1154,7 +1591,7 @@ async function batch() {
 function batchReviewOnly() {
   stopBatchTimer();
   app.innerHTML = `${pageHead({ eyebrow: 'Operations', title: 'Batch validation',
-      lede: 'Validation runs are performed separately, on the processing machine, and cannot be started from this instance.' })}
+      lede: 'Validation runs are started on the processing machine, not on this instance.' })}
     ${infoBox(esc(S.deploy.batch_reason || ''), 'accent')}
     <div class="panel">${panelHead('How a new review list reaches this instance', 'list')}
       <div class="steps-off">
@@ -1224,13 +1661,13 @@ async function opsbar(force = false) {
   let o;
   try { o = await api('/api/operations'); } catch { el.classList.add('hidden'); return; }
   if (!o.available) { el.classList.add('hidden'); return; }
-  const run = (o.runs || []).find(r => r.run_id === S.run);
-  const check = o.last_check;
-  const parts = [`<span>Operational records: <b>PostgreSQL</b>${o.database?.reachable ? (o.hosted ? ' (read live from the processing machine)' : '') : ' <span class="bad">unreachable</span>'}</span>`];
-  if (S.run) parts.push(`<span>This round: ${run ? `<b>${esc(run.status === 'PUBLISHED' ? 'published' : 'registered')}</b> ${esc(when(run.published_utc || run.registered_utc))}` : '<span class="warn">not in the run registry</span>'}</span>`);
-  parts.push(`<span>Last integrity check: ${check ? `${check.status === 'SUCCEEDED' ? '<b>passed</b>' : '<span class="bad">found problems</span>'} ${esc(when(check.finished_utc || check.created_utc))}` : '<span class="warn">none yet</span>'}</span>`);
+  // Shown only when something needs attention.
+  const parts = [];
+  if (!o.database?.reachable) parts.push('<span class="bad">Operations database unreachable</span>');
+  if (o.last_check && o.last_check.status !== 'SUCCEEDED') parts.push(`<span class="bad">Last integrity check found problems</span> ${esc(when(o.last_check.finished_utc || o.last_check.created_utc))}`);
   if ((o.failed_jobs || []).length) parts.push(`<span class="bad">${n(o.failed_jobs.length)} failed ${o.failed_jobs.length === 1 ? 'job' : 'jobs'}</span>${o.uploads ? ' <a href="#/upload">see why</a>' : ''}`);
   if (o.open_alerts?.errors) parts.push(`<span class="bad">${n(o.open_alerts.errors)} open ${o.open_alerts.errors === 1 ? 'alert' : 'alerts'}</span>`);
+  if (!parts.length) { el.classList.add('hidden'); return; }
   el.innerHTML = `<div class="opsbar-row">${parts.join('')}</div>`;
   el.classList.remove('hidden');
 }
@@ -1242,7 +1679,7 @@ async function upload(sub) {
   if (sub) { await datasetPage(sub); return; }
   const ops = await api('/api/operations');
   const head = pageHead({ eyebrow: 'Operations', title: 'Upload & validate',
-    lede: 'Submit a survey delivery, review its pre-flight report, then start the full validation. Earlier runs and their decisions are never changed.' });
+    lede: 'Upload a survey delivery, check the pre-flight report, then start validation.' });
   if (!S.deploy.uploads) {
     app.innerHTML = `${head}${infoBox(esc(ops.available ? 'Uploads and validation runs happen on the processing machine. This instance shows their status only.' : ops.reason), 'accent')}${opsPanels(ops, [], [])}`;
     return;
@@ -1491,8 +1928,14 @@ function modebar() {
   const d = S.deploy || {};
   const parts = [];
   if (d.data_notice) parts.push(`<span><i class="tag synthetic">Synthetic data</i>${esc(d.data_notice)}</span>`);
-  if (d.review_only) parts.push('<span><i class="tag">Review-only</i>Validation runs are performed separately and cannot be started from this instance.</span>');
-  if (d.audit_writable === false) parts.push('<span><b>Decisions are read-only here.</b></span>');
+  // Review-only and read-only decisions are a property of the instance: one compact pill beside the reviewer.
+  const pill = document.querySelector('#modePill');
+  const modes = [d.review_only ? 'Validation runs are performed separately and cannot be started from this instance.' : '', d.audit_writable === false ? 'Decisions are read-only here.' : ''].filter(Boolean);
+  if (pill && modes.length) {
+    pill.innerHTML = `${icon('lock')}<span><b>${d.review_only ? 'Review-only' : 'Read-only'}</b><span class="mode-sub">${d.audit_writable === false ? 'Decisions are read-only here' : 'Runs start on the processing machine'}</span></span>`;
+    pill.title = modes.join(' ');
+    pill.classList.remove('hidden');
+  }
   const el = document.querySelector('#modebar');
   el.innerHTML = parts.length ? `<div class="modebar-row">${parts.join('')}</div>` : '';
   el.classList.toggle('hidden', !parts.length);

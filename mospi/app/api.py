@@ -45,6 +45,7 @@ from mospi.pipeline.stages.fusion.story import build_lane_story
 from mospi.db.audit import SqliteAuditStore
 from mospi.db.connection import DatabaseUnavailable
 from mospi.paths import data_root
+from mospi.survey_rules.plfs import period_label
 from mospi.pipeline.jobs import JobError, JobManager
 
 CODE_VERSION = os.environ.get("MOSPI_CODE_VERSION", "").strip() or None
@@ -590,6 +591,57 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
         report = json.loads((hist / "historical_report.json").read_text(encoding="utf-8")) if (hist / "historical_report.json").is_file() else {}
         return {"available": True, "rows": rows, "notable": notable, "indicators": indicators, "limitations": report.get("limitations", []),
                 "periods": report.get("periods_in_pool", []), "design_period": repository.metadata(directory).get("design_period")}
+
+    @app.get("/api/case-areas")
+    def case_areas(run: str | None = None, state: str | None = None) -> dict[str, Any]:
+        """Read-only counts for the Area trends page: records and cases by area, sector, interview period, list and reasons.
+
+        One row per State/UT (or district of ``state``) x sector x period x list x stored reason set, so every record is
+        counted exactly once; ``decided`` counts the cases of that row that have a decision.  Other current-method rounds
+        of the same observation are summarised for comparison.  Nothing here changes a list, a case or a decision."""
+        directory = repository.path(run)
+        parquet = directory / "fused_cases.parquet"
+        available = _columns(parquet)
+        metadata = repository.metadata(directory)
+        area = "district" if state else "state"
+        if area not in available:
+            return {"available": False, "rows": [], "reason": "This run has no district codes." if state else "This run has no State/UT codes."}
+        period = "period_index" if "period_index" in available else "NULL"
+        reasons = "COALESCE(lanes, '')" if "lanes" in available else "''"
+        decided = list(audit.latest_statuses(directory)) or ["__none__"]
+        rows = repository.query(parquet, f"SELECT {area} AS area, sector, {period} AS period_index, priority_band AS band, {reasons} AS lanes, "
+                                         "COUNT(*) AS records, COUNT(*) FILTER (WHERE case_id IN (SELECT UNNEST($2))) AS decided "
+                                         f"FROM read_parquet($1){' WHERE state = $3' if state else ''} GROUP BY ALL",
+                                [decided, *([state] if state else [])])
+        design = str(metadata.get("design_period") or "")
+        out = [{"area": L.clean(r["area"]), "area_label": (f"District {L.clean(r['area'])}" if state else L.state_name(r["area"])),
+                "sector": L.clean(r["sector"]), "period_index": None if pd.isna(r["period_index"]) else int(r["period_index"]),
+                "band": r["band"], "lanes": [x for x in str(r["lanes"]).split(",") if x], "records": int(r["records"]), "decided": int(r["decided"])}
+               for r in rows]
+        periods = sorted({r["period_index"] for r in out if r["period_index"] is not None})
+        result = {"available": True, "run": directory.name, "level": area, "state": state, "rows": out,
+                  "periods": [{"index": p, "label": period_label(design, p)} for p in periods],
+                  "budget": json.loads((directory / "fusion_report.json").read_text(encoding="utf-8")).get("queue", {}),
+                  "method": "lanes" if "tier" in available else "superseded_v2_0"}
+        if not state:
+            rounds = []
+            for item in repository.runs():
+                if "lanes" not in str(item.get("fusion_version", "")) or item.get("observation") != metadata.get("observation"):
+                    continue
+                other = repository.root / item["directory"]
+                counts = repository.query(other / "fused_cases.parquet",
+                                          "SELECT COUNT(*) AS records, COUNT(*) FILTER (WHERE priority_band = 'CHECK_NOW') AS check_now, "
+                                          "COUNT(*) FILTER (WHERE priority_band = 'CHECK_IF_TIME') AS check_if_time, "
+                                          "COUNT(*) FILTER (WHERE priority_band = 'NOT_ASSESSABLE') AS not_assessable FROM read_parquet(?)")[0]
+                covered = [r["p"] for r in repository.query(other / "fused_cases.parquet", "SELECT DISTINCT period_index AS p FROM read_parquet(?) "
+                                                            "WHERE period_index IS NOT NULL ORDER BY 1")] if "period_index" in _columns(other / "fused_cases.parquet") else []
+                queue = json.loads((other / "fusion_report.json").read_text(encoding="utf-8")).get("queue", {})
+                rounds.append({"run": item["directory"], "release": item.get("release"), "fusion_version": item.get("fusion_version"),
+                               **{k: int(v or 0) for k, v in counts.items()}, "budget_cases": queue.get("budget_cases"),
+                               "review_budget_share": queue.get("review_budget_share"),
+                               "periods": [period_label(str(item.get("design_period") or ""), int(p)) for p in covered]})
+            result["rounds"] = sorted(rounds, key=lambda r: str(r["release"]))
+        return result
 
     @app.get("/api/worklist")
     def worklist(run: str | None = None, state: str | None = None, district: str | None = None, fsu: str | None = None,
