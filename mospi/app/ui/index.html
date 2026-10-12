@@ -6,17 +6,38 @@
 <meta name="color-scheme" content="light">
 <title>MoSPI · Survey Data Validation</title>
 <meta name="description" content="Intelligent Survey Data Validation Platform — supervisor review workspace for PLFS (HSD, NSO, MoSPI).">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23c76b3c'/%3E%3Cpath d='M9 22V10h3v12zm6 0V14h3v8zm6 0v-5h3v5z' fill='%23fffcf7'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/assets/styles.css?v=20261012-ops1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233355e0'/%3E%3Cpath d='M9 22V10h3v12zm6 0V14h3v8zm6 0v-5h3v5z' fill='%23ffffff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/styles.css?v=20261012-ui3">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="shell">
+<aside class="sidebar">
+  <a class="brand" href="#/overview" aria-label="MoSPI survey data validation — overview">
+    <span class="brand-mark" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 32 32"><path d="M6 26V8h4v18zm8 0V14h4v12zm8 0v-8h4v8z" fill="#ffffff"/></svg></span>
+    <span class="brand-text"><b>MoSPI</b><span class="brand-name">Survey Data Validation</span><span class="brand-tag">PLFS</span></span>
+  </a>
+  <nav id="nav" class="navbar" aria-label="Main">
+    <p class="nav-section" aria-hidden="true">Review</p>
+    <a href="#/overview" data-route="overview"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/></svg><span class="nav-label">Overview</span></a>
+    <a href="#/worklist" data-route="worklist"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span class="nav-label">Worklist by FSU</span></a>
+    <a href="#/cases" data-route="cases"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span class="nav-label">All cases</span></a>
+    <a href="#/groups" data-route="groups"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Group alerts (FSU)</span></a>
+    <a href="#/areas" data-route="areas"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/></svg><span class="nav-label">Area trends</span></a>
+    <a href="#/reviewed" data-route="reviewed"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><span class="nav-label">Decisions</span></a>
+    <span class="nav-sep" aria-hidden="true"></span>
+    <p class="nav-section" aria-hidden="true">Operations</p>
+    <a href="#/upload" data-route="upload"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><span class="nav-label">Upload &amp; validate</span></a>
+    <a href="#/batch" data-route="batch"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></svg><span class="nav-label">Batch validation</span></a>
+    <p class="nav-section" aria-hidden="true">Reference</p>
+    <a href="#/technical" data-route="technical" class="secondary"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/></svg><span class="nav-label">Technical reference</span></a>
+  </nav>
+  <div class="sidebar-foot">MoSPI · Intelligent Survey Data Validation Platform</div>
+</aside>
+<div class="main-col">
 <header class="topbar">
   <div class="mast">
     <div class="topbar-row">
-      <a class="brand" href="#/overview" aria-label="MoSPI survey data validation — overview">
-        <span class="brand-mark" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 32 32"><path d="M6 26V8h4v18zm8 0V14h4v12zm8 0v-8h4v8z" fill="#fffcf7"/></svg></span>
-        <span class="brand-text"><b>MoSPI</b><span class="brand-name">Survey Data Validation</span><span class="brand-tag">PLFS</span></span>
-      </a>
       <div class="top-tools">
         <label class="tool"><span>Survey round</span><select id="runSelect" aria-label="Survey round"></select></label>
         <label class="tool"><span>Reviewing as</span><input id="reviewer" placeholder="Your name" autocomplete="name" aria-label="Reviewing as"></label>
@@ -24,22 +45,10 @@
       </div>
     </div>
   </div>
-  <nav id="nav" class="navbar" aria-label="Main">
-    <a href="#/overview" data-route="overview">Overview</a>
-    <a href="#/worklist" data-route="worklist">Worklist by FSU</a>
-    <a href="#/cases" data-route="cases">All cases</a>
-    <a href="#/groups" data-route="groups">Group alerts (FSU)</a>
-    <a href="#/areas" data-route="areas">Area trends</a>
-    <a href="#/reviewed" data-route="reviewed">Decisions</a>
-    <span class="nav-sep" aria-hidden="true"></span>
-    <a href="#/upload" data-route="upload">Upload &amp; validate</a>
-    <a href="#/batch" data-route="batch">Batch validation</a>
-    <a href="#/technical" data-route="technical" class="secondary">Technical reference</a>
-  </nav>
   <div id="modebar" class="modebar hidden" role="note"></div>
   <div id="opsbar" class="opsbar hidden" role="status"></div>
 </header>
-<main class="content">
+<main id="main" class="content" tabindex="-1">
   <div id="notice" class="notice hidden" role="status"></div>
   <section id="app" aria-live="polite"><div class="loading">Loading…</div></section>
 </main>
@@ -49,6 +58,8 @@
     <span class="powered">Powered by <b>INNODATATICS</b></span>
   </div>
 </footer>
-<script src="/assets/app.js?v=20261012-ops1"></script>
+</div>
+</div>
+<script src="/assets/app.js?v=20261012-ui3"></script>
 </body>
 </html>

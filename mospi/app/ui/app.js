@@ -73,7 +73,15 @@ function pageHead({ eyebrow = '', title, lede = '', actions = '' }) {
   return `<div class="page-head"><div>${eyebrow ? `<p class="eyebrow">${esc(eyebrow)}</p>` : ''}<h1>${esc(title)}</h1>${lede ? `<p class="lede">${lede}</p>` : ''}</div>${actions ? `<div class="page-actions">${actions}</div>` : ''}</div>`;
 }
 const panelHead = (title, iconName = '', right = '') => `<div class="panel-head"><h2>${iconName ? icon(iconName) : ''}${esc(title)}</h2>${right}</div>`;
-const meter = (part, whole) => `<div class="meter" role="img" aria-label="${n(part)} of ${n(whole)}"><i style="width:${whole ? Math.min(100, (part / whole) * 100) : 0}%"></i></div>`;
+// Progress ring for a stored share (decided of listed); the number beside it is the same share as text.
+const ring = (part, whole, size = 56) => {
+  const r = size / 2 - 5, c = 2 * Math.PI * r, share = whole ? Math.min(1, part / whole) : 0;
+  return `<svg class="ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="${n(part)} of ${n(whole)} decided">
+    <circle class="ring-track" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="6"/>
+    <circle class="ring-fill" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="6" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - share)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>
+    <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central">${whole ? `${Math.round(share * 100)}%` : '—'}</text></svg>`;
+};
+const meter = (part, whole) =>`<div class="meter" role="img" aria-label="${n(part)} of ${n(whole)}"><i style="width:${whole ? Math.min(100, (part / whole) * 100) : 0}%"></i></div>`;
 const infoBox = (html, tone = '') => `<div class="info ${tone}">${icon('info')}<div>${html}</div></div>`;
 function pager(prev, next, label = '') {
   return prev || next || label ? `<div class="pager">${label ? `<span>${label}</span>` : ''}${prev || ''}${next || ''}</div>` : '';
@@ -116,8 +124,11 @@ async function route() {
     a.classList.toggle('active', on);
     if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
+  const navEl = document.querySelector('#nav'), activeLink = navEl.querySelector('a.active');   // narrow screens: keep the current page in view
+  if (activeLink && navEl.scrollWidth > navEl.clientWidth) navEl.scrollLeft = activeLink.offsetLeft - navEl.offsetLeft - 24;
   notice(S.flash?.text || '', S.flash?.kind || ''); S.flash = null;
   app.innerHTML = '<div class="loading">Loading…</div>';
+  vizRedraw = null; hideTip();
   opsbar(page === 'overview');
   try { await routes[page](decodeURIComponent(rest.join('/')), new URLSearchParams(query || '')); }
   catch (e) {
@@ -160,9 +171,11 @@ async function overview() {
       actions: `<a class="btn secondary" href="#/reviewed">Decisions</a><a class="btn secondary" href="${lanes ? '#/worklist' : '#/cases'}">${icon('list')}Open ${lanes ? 'worklist' : 'case list'}</a>` })}
     <section class="summary" aria-label="Review queue">
       <div class="metric lead">
+        <div class="m-top"><div>
         <span class="m-label"><span class="dot red"></span>${lanes ? `Needs a decision · “${esc(nowLabel)}”` : 'Highest priority, not yet decided'}</span>
-        <span class="m-value">${n(left)}</span>
-        <span class="m-sub">${n(now.records)} ${now.records === 1 ? 'case' : 'cases'} in the list · ${n(now.reviewed)} decided</span>
+        <span class="m-value" style="display:block">${n(left)}</span>
+        <span class="m-sub">${n(now.records)} ${now.records === 1 ? 'case' : 'cases'} in the list · ${n(now.reviewed)} decided</span></div>
+        ${now.records ? ring(now.reviewed, now.records) : ''}</div>
         ${meter(now.reviewed, now.records)}
         <div class="m-foot">${lanes && now.records ? `<p>${left ? 'Cases are grouped by FSU and household, so one visit or call can settle several.' : `Every “${esc(nowLabel)}” case has a decision. Continue with “${esc(laterLabel)}”.`}</p>
           <a class="btn cta" href="${startHref}">${left ? 'Start reviewing' : `Open “${esc(laterLabel)}”`}</a>`
@@ -435,6 +448,232 @@ async function groupPage(fsu, params) {
         <td><a href="#/case/${encodeURIComponent(r.case_id)}">${esc(r.unusual || '')}</a></td><td class="small">${esc(r.record_label || '')}</td><td>${decisionChip(r.review_status)}</td></tr>`))}</div>`;
 }
 
+/* ------------------------------------------------------------ chart toolkit
+ *
+ * Hand-written inline SVG (no library, no network).  Every mark is drawn from rows the API returned; the only
+ * arithmetic is scaling, ±1.96 × standard error bands, medians and differences of stored values.
+ * Text is escaped with esc(); tooltips are one shared element fed from data-tip attributes (hover and keyboard focus). */
+
+const VIZ = {
+  // categorical series (focus area first); validated all-pairs for colour-vision deficiency and normal vision on white
+  series: ['#3355e0', '#eb6834', '#8a5a00', '#b0399a'],
+  // diverging, direction only (decrease blue <- grey -> increase orange), never good/bad
+  div: ['#1f3d9e', '#4565d6', '#8fa5ee', '#cdd7f8', '#eceef3', '#f8d5bd', '#f0a46c', '#d9701f', '#9c4a0c'],
+  none: '#f1f2f6',
+};
+let vizSeq = 0;
+let vizRedraw = null;
+const vscale = (d0, d1, r0, r1) => { const k = d1 === d0 ? 0 : (r1 - r0) / (d1 - d0); return v => r0 + (v - d0) * k; };
+function niceStep(lo, hi, count = 5) {
+  const raw = Math.max(hi - lo, 1e-12) / count, mag = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw * 0.999);
+}
+function niceDomain(lo, hi, count = 5) {
+  if (!(hi > lo)) { const pad = Math.abs(hi) * 0.1 || 1; lo -= pad; hi += pad; }
+  const step = niceStep(lo, hi, count);
+  const d0 = Math.floor(lo / step) * step, d1 = Math.ceil(hi / step) * step;
+  const ticks = []; for (let v = d0; v <= d1 + step * 1e-6; v += step) ticks.push(+v.toFixed(10));
+  return { d0, d1, step, ticks };
+}
+function tickFormat(indicator, step) {
+  const u = INDICATOR_UNIT[indicator];
+  if (u === 'share') return v => `${(v * 100).toFixed(step * 100 < 1 ? 1 : 0)}%`;
+  if (u === 'rupees') return v => (Math.abs(v) >= 1000 ? `₹${(v / 1000).toFixed(step < 1000 ? 1 : 0)}K` : `₹${Math.round(v)}`);
+  return v => `${v.toFixed(step < 1 ? 1 : 0)} h`;
+}
+const svgEl = (w, h, label, body, cls = '') => `<svg class="viz ${cls}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}">${body}</svg>`;
+const hatchDef = (id, color = '#8d93a6') => `<defs><pattern id="${id}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="#ffffff"/><line x1="0" y1="0" x2="0" y2="5" stroke="${color}" stroke-width="1.6"/></pattern></defs>`;
+function runs(points) {   // contiguous stretches of points that have a value
+  const out = []; let cur = [];
+  points.forEach(p => { if (p && p.y != null && Number.isFinite(p.y)) cur.push(p); else if (cur.length) { out.push(cur); cur = []; } });
+  if (cur.length) out.push(cur);
+  return out;
+}
+const pathD = pts => pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('');
+const bandD = pts => `${pathD(pts.map(p => ({ x: p.x, y: p.hi })))}${pts.slice().reverse().map(p => `L${p.x.toFixed(1)},${p.lo.toFixed(1)}`).join('')}Z`;
+function yGrid(dom, y, x0, x1, fmt) {
+  return `<g class="grid">${dom.ticks.map(t => `<line x1="${x0}" x2="${x1}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>`).join('')}</g>
+    ${dom.ticks.map(t => `<text x="${x0 - 8}" y="${y(t).toFixed(1)}" text-anchor="end" dominant-baseline="middle">${esc(fmt(t))}</text>`).join('')}`;
+}
+function xGrid(dom, x, y0, y1, fmt, labelY) {
+  return `<g class="grid">${dom.ticks.map(t => `<line y1="${y0}" y2="${y1}" x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}"/>`).join('')}</g>
+    ${dom.ticks.map(t => `<text x="${x(t).toFixed(1)}" y="${labelY}" text-anchor="middle">${esc(fmt(t))}</text>`).join('')}`;
+}
+// Tooltip content: the value leads, the label follows; a short line key carries the series identity.
+function tipHtml(head, rows) {
+  return `<div class="t-head">${esc(head)}</div>${rows.map(r => `<div class="t-row">${r.color ? `<i class="t-key" style="background:${r.color}"></i>` : ''}<b>${esc(r.value)}</b><span>${esc(r.label || '')}</span></div>${r.sub ? `<div class="t-sub">${esc(r.sub)}</div>` : ''}`).join('')}`;
+}
+const tipAttr = html => ` data-tip="${esc(html)}"`;
+const trunc = (s, k) => (s.length > k ? `${s.slice(0, k - 1)}…` : s);
+const vizWidth = el => Math.max(260, Math.floor(el?.clientWidth || 600));
+
+/* Shared tooltip: one element, positioned at the pointer or at the focused mark. */
+const vtip = Object.assign(document.createElement('div'), { className: 'vtip', role: 'tooltip' });
+document.body.appendChild(vtip);
+function hideTip() { vtip.classList.remove('on'); }
+function placeTip(x, y) {
+  const w = vtip.offsetWidth, h = vtip.offsetHeight;
+  vtip.style.left = `${Math.max(8, Math.min(x + 14, window.innerWidth - w - 8))}px`;
+  vtip.style.top = `${y - h - 12 < 8 ? y + 18 : y - h - 12}px`;
+}
+function showTip(el, x, y) { vtip.innerHTML = el.dataset.tip; vtip.classList.add('on'); placeTip(x, y); }
+document.addEventListener('pointerover', e => { const t = e.target.closest?.('[data-tip]'); if (t) showTip(t, e.clientX, e.clientY); else hideTip(); });
+document.addEventListener('pointermove', e => { if (vtip.classList.contains('on') && e.target.closest?.('[data-tip]')) placeTip(e.clientX, e.clientY); });
+document.addEventListener('focusin', e => { const t = e.target.closest?.('[data-tip]'); if (t) { const r = t.getBoundingClientRect(); showTip(t, r.left + r.width / 2, r.top); } else hideTip(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTip(); });
+window.addEventListener('scroll', hideTip, { passive: true });
+window.addEventListener('resize', () => { clearTimeout(window.vizResize); window.vizResize = setTimeout(() => vizRedraw?.(), 150); });
+
+// One tab stop per chart; arrow keys move between its marks (a grid passes its column count in data-cols).
+function roving(root) {
+  const items = [...root.querySelectorAll('[data-rove]')];
+  items.forEach((el, i) => el.setAttribute('tabindex', i ? '-1' : '0'));
+  root.onkeydown = e => {
+    const i = items.indexOf(e.target.closest?.('[data-rove]'));
+    if (i < 0) return;
+    const cols = Number(root.querySelector('[data-cols]')?.dataset.cols || 1);
+    const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols, Home: -i, End: items.length - 1 - i }[e.key];
+    if (step == null) return;
+    e.preventDefault();
+    const j = Math.max(0, Math.min(items.length - 1, i + step));
+    items[i].setAttribute('tabindex', '-1'); items[j].setAttribute('tabindex', '0'); items[j].focus();
+  };
+}
+
+/* Line chart over periods with an optional ±1.96 × SE band per series, markers for unusual / expected / imprecise points,
+   and a crosshair column per period that carries the tooltip for every series at that period. */
+function lineChart({ width: W, height: H = 280, periods, series, indicator, label, tipFor }) {
+  const m = { l: 58, r: 18, t: 14, b: 30 };
+  const share = INDICATOR_UNIT[indicator] === 'share';
+  const lo = v => Math.max(0, v), hi = v => (share ? Math.min(1, v) : v);
+  const vals = series.flatMap(s => s.points.flatMap(p => (p.v == null ? [] : s.band && p.se != null ? [lo(p.v - 1.96 * p.se), hi(p.v + 1.96 * p.se)] : [p.v])));
+  if (!vals.length) return empty('No value for this area and indicator.');
+  const dom = niceDomain(Math.max(0, Math.min(...vals)), Math.max(...vals), 5);
+  const fmt = tickFormat(indicator, dom.step);
+  const y = vscale(dom.d0, dom.d1, H - m.b, m.t);
+  const k = periods.length;
+  const x = k === 1 ? () => (m.l + W - m.r) / 2 : vscale(0, k - 1, m.l + 8, W - m.r - 8);
+  const colW = k === 1 ? W - m.l - m.r : (W - m.l - m.r - 16) / (k - 1);
+  const every = Math.max(1, Math.ceil(k * 62 / (W - m.l - m.r)));
+  const uid = `v${++vizSeq}`;
+  let body = hatchDef(uid) + yGrid(dom, y, m.l, W - m.r, fmt) + `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}"/>`;
+  body += periods.map(([, lbl], i) => (i % every === 0 || i === k - 1) && !(i !== k - 1 && k - 1 - i < every) ? `<text x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(lbl)}</text>` : '').join('');
+  series.forEach(s => {
+    const pts = s.points.map((p, i) => ({ x: x(i), y: p.v == null ? null : y(p.v), hi: p.se == null || p.v == null ? null : y(hi(p.v + 1.96 * p.se)), lo: p.se == null || p.v == null ? null : y(lo(p.v - 1.96 * p.se)) }));
+    if (s.band) body += runs(pts.map(p => (p.hi == null ? null : p))).map(r => `<path class="band" d="${bandD(r)}" fill="${s.color}"/>`).join('');
+  });
+  series.forEach(s => {
+    const pts = s.points.map((p, i) => ({ x: x(i), y: p.v == null ? null : y(p.v) }));
+    body += runs(pts).map(r => (r.length > 1 ? `<path class="ln ${s.dash ? 'dash' : 'draw'}" ${s.dash ? '' : 'pathLength="1"'} d="${pathD(r)}" stroke="${s.color}"/>` : '')).join('');
+    s.points.forEach((p, i) => {
+      if (p.v == null) return;
+      const cx = x(i).toFixed(1), cy = y(p.v).toFixed(1);
+      if (p.notable || p.expected) body += `<circle class="ring-mark" cx="${cx}" cy="${cy}" r="8" ${p.expected ? 'stroke-dasharray="2.5 2"' : ''}/>`;
+      if (k <= 24 || i === k - 1 || p.low || p.notable) body += `<circle class="pt ${p.low ? 'low' : ''}" cx="${cx}" cy="${cy}" r="4" fill="${s.color}" ${p.low ? `stroke="${s.color}"` : ''}/>`;
+    });
+    const lastI = s.points.map(p => p.v != null).lastIndexOf(true);
+    if (s.endLabel && lastI >= 0) {
+      const ex = x(lastI), ey = y(s.points[lastI].v);
+      body += `<text class="lbl-strong" x="${(ex + (ex > W - 80 ? -10 : 10)).toFixed(1)}" y="${(ey - 12).toFixed(1)}" text-anchor="${ex > W - 80 ? 'end' : 'start'}">${esc(indicatorValue(indicator, s.points[lastI].v))}</text>`;
+    }
+  });
+  body += `<g data-cols="1">${periods.map(([pi, lbl], i) => `<g class="col" data-rove${tipAttr(tipFor(pi, lbl))} aria-label="${esc(lbl)}">
+      <line class="xhair" x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${m.t}" y2="${H - m.b}"/>
+      <rect class="hit" x="${(x(i) - colW / 2).toFixed(1)}" y="${m.t}" width="${Math.max(8, colW).toFixed(1)}" height="${H - m.t - m.b}"/></g>`).join('')}</g>`;
+  return svgEl(W, H, label, body);
+}
+
+/* Horizontal bars from zero with a ±1.96 × SE whisker, a reference line, and a hatched fill for low-precision values. */
+function rankChart({ width: W, items, indicator, ref, label, rowH = 26 }) {
+  if (!items.length) return empty('No area matches.');
+  const labelW = Math.min(210, Math.round(W * 0.36)), valW = 70;
+  const m = { l: labelW + 10, r: valW, t: ref ? 22 : 6, b: 26 };
+  const H = m.t + items.length * rowH + m.b;
+  const top = Math.max(...items.map(i => (i.v ?? 0) + 1.96 * (i.se ?? 0)), ref?.v ?? 0);
+  const dom = niceDomain(0, top || 1, Math.max(2, Math.min(5, Math.floor((W - m.l - m.r) / 90))));
+  const fmt = tickFormat(indicator, dom.step);
+  const x = vscale(0, dom.d1, m.l, W - m.r);
+  const uid = `v${++vizSeq}`;
+  let body = hatchDef(uid, '#3355e0') + xGrid(dom, x, m.t - 4, H - m.b, fmt, H - 8);
+  body += `<g data-cols="1">${items.map((it, i) => {
+    const cy = m.t + i * rowH + rowH / 2;
+    const w = it.v == null ? 0 : Math.max(1, x(it.v) - x(0));
+    const wl = it.se == null || it.v == null ? null : x(Math.max(0, it.v - 1.96 * it.se)), wr = it.se == null || it.v == null ? null : x(it.v + 1.96 * it.se);
+    return `<g class="rk ${it.focus ? 'focus' : ''}" data-rove ${it.key ? `data-focus="${esc(it.key)}"` : ''}${tipAttr(it.tip)} aria-label="${esc(it.name)}">
+      <rect class="hit" x="0" y="${(cy - rowH / 2).toFixed(1)}" width="${W}" height="${rowH}" rx="6"/>
+      <text class="lbl-ink" x="${labelW}" y="${cy.toFixed(1)}" text-anchor="end" dominant-baseline="middle">${esc(trunc(it.name, Math.floor(labelW / 6.4)))}</text>
+      ${it.v == null ? '' : `<rect class="bar-fill" x="${x(0).toFixed(1)}" y="${(cy - 6).toFixed(1)}" width="${w.toFixed(1)}" height="12" rx="3" fill="${it.low ? `url(#${uid})` : it.color || VIZ.series[0]}" ${it.low ? `stroke="${VIZ.series[0]}" stroke-width="1"` : ''}/>`}
+      ${wl == null ? '' : `<line class="whisker" x1="${wl.toFixed(1)}" x2="${wr.toFixed(1)}" y1="${cy.toFixed(1)}" y2="${cy.toFixed(1)}"/><line class="whisker" x1="${wl.toFixed(1)}" x2="${wl.toFixed(1)}" y1="${cy - 4}" y2="${cy + 4}"/><line class="whisker" x1="${wr.toFixed(1)}" x2="${wr.toFixed(1)}" y1="${cy - 4}" y2="${cy + 4}"/>`}
+      <text class="lbl-strong" x="${W - 4}" y="${cy.toFixed(1)}" text-anchor="end" dominant-baseline="middle">${esc(indicatorValue(indicator, it.v))}</text></g>`;
+  }).join('')}</g>`;
+  if (ref && ref.v != null) body += `<line class="ref" x1="${x(ref.v).toFixed(1)}" x2="${x(ref.v).toFixed(1)}" y1="${m.t - 6}" y2="${H - m.b}"/>
+    <text class="lbl-ink" x="${x(ref.v).toFixed(1)}" y="${m.t - 10}" text-anchor="middle">${esc(ref.label)} ${esc(indicatorValue(indicator, ref.v))}</text>`;
+  return svgEl(W, H, label, body);
+}
+
+const divColor = z => (z == null || !Number.isFinite(z) ? null : VIZ.div[z <= -4 ? 0 : z <= -3 ? 1 : z <= -2 ? 2 : z <= -1 ? 3 : z < 1 ? 4 : z < 2 ? 5 : z < 3 ? 6 : z < 4 ? 7 : 8]);
+const divLegend = () => `<span><span class="div-scale" aria-hidden="true">${VIZ.div.map(c => `<i style="background:${c}"></i>`).join('')}</span>
+  <span class="small">decrease ← change ÷ design SE (−4 … +4) → increase</span></span><span><i class="k-sw" style="background:${VIZ.none};outline:1px dashed #8d93a6"></i>not assessable</span><span><i class="k-ring" style="border-radius:2px"></i>unusual change</span>`;
+
+/* Areas × periods heatmap; one tab stop, arrow keys move cell by cell. */
+function heatmap({ width: W, rows, periods, cell, label }) {
+  if (!rows.length || !periods.length) return empty('No area matches.');
+  const labelW = Math.min(200, Math.round(W * 0.32));
+  const cw = Math.max(18, Math.floor((W - labelW - 12) / periods.length)), ch = 22;
+  const Wt = labelW + 12 + cw * periods.length, H = 26 + rows.length * ch + 4;
+  const every = Math.max(1, Math.ceil(56 / cw));
+  const uid = `v${++vizSeq}`;
+  let body = hatchDef(uid) + periods.map(([, lbl], j) => (j % every === 0 ? `<text x="${(labelW + 12 + j * cw + cw / 2).toFixed(1)}" y="14" text-anchor="middle">${esc(String(lbl).replace(/ (\d{2})(\d{2})$/, ' ’$2'))}</text>` : '')).join('');
+  body += `<g data-cols="${periods.length}">`;
+  rows.forEach((r, i) => {
+    const y0 = 24 + i * ch;
+    body += `<text class="${r.focus ? 'lbl-strong' : 'lbl-ink'}" x="${labelW}" y="${y0 + ch / 2}" text-anchor="end" dominant-baseline="middle">${esc(trunc(r.name, Math.floor(labelW / 6.4)))}</text>`;
+    periods.forEach(([pi, lbl], j) => {
+      const c = cell(r, pi, lbl);
+      const fill = divColor(c.z);
+      body += `<rect class="cell ${c.notable ? 'notable' : ''}" data-rove${tipAttr(c.tip)} aria-label="${esc(`${r.name}, ${lbl}`)}" x="${labelW + 12 + j * cw}" y="${y0}" width="${cw}" height="${ch}" rx="3" fill="${fill || (c.present ? `url(#${uid})` : VIZ.none)}"/>`;
+    });
+  });
+  return svgEl(Wt, H, label, `${body}</g>`);
+}
+
+const sparkline = (values, { w = 160, h = 34, color = VIZ.series[0], lowLast = false } = {}) => {
+  const pts = values.map((v, i) => ({ i, v })).filter(p => p.v != null);
+  if (!pts.length) return `<svg class="viz" width="${w}" height="${h}" aria-hidden="true"></svg>`;
+  const lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  const x = values.length === 1 ? () => w / 2 : vscale(0, values.length - 1, 4, w - 6), y = vscale(lo === hi ? lo - 1 : lo, lo === hi ? hi + 1 : hi, h - 5, 5);
+  const xy = pts.map(p => ({ x: x(p.i), y: y(p.v) }));
+  const end = xy[xy.length - 1];
+  return `<svg class="viz" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" preserveAspectRatio="none">${runs(values.map((v, i) => (v == null ? null : { x: x(i), y: y(v) }))).map(r => `<path class="ln" style="stroke-width:1.6" d="${pathD(r)}" stroke="${color}"/>`).join('')}
+    <circle class="pt ${lowLast ? 'low' : ''}" cx="${end.x.toFixed(1)}" cy="${end.y.toFixed(1)}" r="3.5" fill="${color}" stroke="${lowLast ? color : ''}"/></svg>`;
+};
+
+/* Spread of area values in one period: one strip per sector, median marked, focus area highlighted. */
+function spreadChart({ width: W, groups, indicator, label }) {
+  const all = groups.flatMap(g => g.values.map(v => v.v)).filter(v => v != null);
+  if (!all.length) return empty('No value this period.');
+  const m = { l: 70, r: 16, t: 8, b: 26 }, gh = 54;
+  const H = m.t + groups.length * gh + m.b;
+  const dom = niceDomain(Math.max(0, Math.min(...all)), Math.max(...all), Math.max(2, Math.min(5, Math.floor((W - m.l - m.r) / 80))));
+  const fmt = tickFormat(indicator, dom.step);
+  const x = vscale(dom.d0, dom.d1, m.l, W - m.r);
+  let body = xGrid(dom, x, m.t, H - m.b, fmt, H - 8);
+  groups.forEach((g, gi) => {
+    const cy = m.t + gi * gh + gh / 2;
+    const vals = g.values.filter(v => v.v != null).sort((a, b) => a.v - b.v);
+    const med = median(vals.map(v => v.v));
+    body += `<text class="lbl-ink" x="${m.l - 10}" y="${cy}" text-anchor="end" dominant-baseline="middle">${esc(g.name)}</text>`;
+    body += vals.map((v, i) => `<circle class="spread-dot ${v.focus ? 'focus' : ''}" cx="${x(v.v).toFixed(1)}" cy="${(cy + ((i * 7) % 5 - 2) * 3.4).toFixed(1)}" r="${v.focus ? 5.5 : 3.6}"${tipAttr(tipHtml(g.name, [{ value: indicatorValue(indicator, v.v), label: v.name }]))}/>`).join('');
+    if (med != null) body += `<line class="ref" x1="${x(med).toFixed(1)}" x2="${x(med).toFixed(1)}" y1="${cy - 17}" y2="${cy + 17}" style="stroke-dasharray:none;stroke-width:2"/>
+      <text class="lbl-strong" x="${x(med).toFixed(1)}" y="${cy - 20}" text-anchor="middle">median ${esc(indicatorValue(indicator, med))}</text>`;
+  });
+  return svgEl(W, H, label, body);
+}
+function median(values) {
+  const v = values.filter(x => x != null && Number.isFinite(x)).sort((a, b) => a - b);
+  return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null;
+}
+
 /* ------------------------------------------------------------ areas */
 
 const INDICATOR_UNIT = { lfpr_cws_15plus: 'share', wpr_cws_15plus: 'share', ur_cws_15plus: 'share', median_salaried_earnings: 'rupees', mean_day7_hours_workers: 'hours' };
@@ -443,34 +682,330 @@ function indicatorValue(indicator, v) {
   const u = INDICATOR_UNIT[indicator];
   return u === 'share' ? `${(v * 100).toFixed(1)}%` : u === 'rupees' ? money(v) : `${Number(v).toFixed(1)} h`;
 }
+// A change of a share is in percentage points; rupees and hours keep their unit.
+function changeValue(indicator, v) {
+  if (v == null) return '—';
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '';
+  return INDICATOR_UNIT[indicator] === 'share' ? `${sign}${Math.abs(v * 100).toFixed(Math.abs(v) < 0.001 ? 2 : 1)} pp` : `${sign}${indicatorValue(indicator, Math.abs(v))}`;
+}
+const SECTOR_NAME = { 1: 'Rural', 2: 'Urban' };
+const sectorName = s => SECTOR_NAME[s] || (s ? `Sector ${s}` : 'Combined');
+const placeKey = r => `${r.state || ''}|${r.district || ''}`;
+const placeName = r => (r.state ? String(r.area_label || '').split(' · ').slice(0, -1).join(' · ') || r.area_label : 'All India');
+const seOf = r => r?.design_standard_error ?? r?.srs_standard_error ?? null;
+// Display rule for "low precision" (screening only): any one of these makes an estimate indicative, never solid.
+const PRECISION = { rse: 0.25, deff: 5, persons: 100 };
+function precisionIssues(r) {
+  if (!r || r.value == null) return [];
+  const out = [];
+  const se = seOf(r);
+  if (r.design_standard_error == null) out.push('no design-based standard error');
+  if (se != null && (r.value === 0 ? se > 0 : se / Math.abs(r.value) > PRECISION.rse)) out.push(`standard error above ${PRECISION.rse * 100}% of the value`);
+  if (r.design_effect != null && r.design_effect > PRECISION.deff) out.push(`design effect above ${PRECISION.deff}`);
+  if (r.persons_15plus != null && r.persons_15plus < PRECISION.persons) out.push(`fewer than ${PRECISION.persons} persons aged 15+`);
+  return out;
+}
+const precisionNote = `Low precision when any of: no design-based standard error, standard error above ${PRECISION.rse * 100}% of the value, design effect above ${PRECISION.deff}, or fewer than ${PRECISION.persons} persons aged 15+. Read such estimates as indicative only.`;
+const LEVEL_NAME = { national: 'National', state: 'State/UT', district: 'District' };
+
 async function areas(_, params) {
   crumbs(['Area trends']);
   const level = params.get('level') || 'state';
   const indicator = params.get('indicator') || 'ur_cws_15plus';
-  const data = await api(url('/api/aggregates', { run: S.run, level, indicator, limit: 5000 }));
+  // All India rows give the reference line and the default focus at State and District level (same endpoint, national level).
+  const [data, nat] = await Promise.all([api(url('/api/aggregates', { run: S.run, level, indicator, limit: 5000 })),
+    level === 'national' ? null : api(url('/api/aggregates', { run: S.run, level: 'national', indicator, limit: 5000 })).catch(() => null)]);
   const head = pageHead({ eyebrow: 'Context', title: 'Area trends',
     lede: 'Weighted current-weekly-status indicators from first-visit records, and the period-on-period changes that stand out. Screening values, not official PLFS estimates.' });
   if (!data.available) { app.innerHTML = head + empty('No historical run is attached to this survey round.'); return; }
-  const periods = [...new Set(data.rows.map(r => r.period_label))];
-  const last = periods[periods.length - 1];
-  const rows = data.rows.filter(r => r.period_label === last);
-  app.innerHTML = `${head}
-    <div class="panel">${panelHead('Unusual period-on-period changes', 'alert', `<span class="small muted">${n(data.notable.length)} ${data.notable.length === 1 ? 'change' : 'changes'}${data.notable.length > 100 ? ' · first 100 shown' : ''}</span>`)}
-      <p class="small muted">A change is shown when it stands out from the other areas' changes in the same period <i>and</i> exceeds three standard errors of the change. Changes listed by HSD as known events are marked as expected instead.</p>
-      ${table(['Area', 'Indicator', 'Period', { label: 'Before', num: true }, { label: 'Now', num: true }, { label: 'Change / SE', num: true }], data.notable.slice(0, 100).map(a =>
-        `<tr><td>${esc(a.area_label)}</td><td>${esc(a.indicator_label)}</td><td>${esc(a.period_label)}</td><td class="num">${esc(indicatorValue(a.indicator, a.previous_value))}</td><td class="num">${esc(indicatorValue(a.indicator, a.value))}</td><td class="num">${a.change_over_design_se == null ? '—' : Number(a.change_over_design_se).toFixed(1)}</td></tr>`), { empty: 'No unusual change.' })}</div>
-    <div class="panel">${panelHead(`${(data.indicators.find(i => i.indicator === indicator) || {}).indicator_label || indicator} — ${last || ''}`, 'map')}
-      <form class="filters" id="af" style="margin-bottom:14px"><label>Level <select name="level">${['national', 'state', 'district'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select></label>
+
+  /* ---- index the rows: area = place (State/UT, district) × sector; one row per period */
+  const indLabel = (data.indicators.find(i => i.indicator === indicator) || {}).indicator_label || indicator;
+  const natRows = level === 'national' ? [] : (nat?.available ? nat.rows : []);
+  const periods = [...new Map([...data.rows, ...natRows].map(r => [r.period_index, r.period_label])).entries()].sort((a, b) => a[0] - b[0]);
+  const lastIdx = data.rows.length ? Math.max(...data.rows.map(r => r.period_index)) : null;
+  const last = (periods.find(p => p[0] === lastIdx) || [])[1] || '';
+  const series = new Map();
+  [...data.rows, ...natRows].forEach(r => { const k = `${placeKey(r)}#${r.sector}`; if (!series.has(k)) series.set(k, new Map()); series.get(k).set(r.period_index, r); });
+  const get = (place, sector, pi) => series.get(`${place}#${sector}`)?.get(pi);
+  const latestOf = (place, sector) => { for (let i = periods.length - 1; i >= 0; i -= 1) { const r = get(place, sector, periods[i][0]); if (r && r.value != null) return r; } return null; };
+  const places = new Map();
+  data.rows.forEach(r => { if (!places.has(placeKey(r))) places.set(placeKey(r), { key: placeKey(r), name: placeName(r) }); });
+  const hasNat = level === 'national' || natRows.length > 0;
+  if (hasNat && !places.has('|')) places.set('|', { key: '|', name: 'All India' });
+  const placeList = [...places.values()].filter(p => p.key !== '|').sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
+  const sectors = [...new Set(data.rows.map(r => r.sector))].sort();
+  const truncated = data.rows.length >= 5000;
+  const notable = data.notable || [];
+
+  /* ---- view state (client-side only; level and indicator stay in the URL through the #af form) */
+  const wanted = params.get('area');
+  const V = {
+    sector: sectors.includes(params.get('sector')) ? params.get('sector') : sectors.includes('1') ? '1' : sectors[0],
+    focus: wanted != null && places.has(wanted) ? wanted : hasNat ? '|' : (placeList[0]?.key || ''),
+    compare: [], q: '', top: 15, order: 'desc', sm: 'value',
+    board: { ind: 'all', level: 'all', period: '', sort: 'strength' },
+  };
+  const nameOf = key => places.get(key)?.name || 'All India';
+  const fmtSe = r => (seOf(r) == null ? 'no standard error' : `± ${indicatorValue(indicator, 1.96 * seOf(r))} (95%)`);
+  const rowTip = (title, r) => tipHtml(title, [{ value: indicatorValue(indicator, r?.value), label: `${sectorName(r?.sector)} · ${r?.period_label || ''}`,
+    sub: r ? `${fmtSe(r)} · ${n(r.persons_15plus)} persons 15+${r.change != null ? ` · change ${changeValue(indicator, r.change)}` : ''}${precisionIssues(r).length ? ' · low precision' : ''}${r.notable_change ? ' · unusual change' : ''}` : '' }]);
+
+  const multiSector = sectors.length > 1;
+  app.innerHTML = `${head}<div id="at">
+    <div class="toolbar at-controls">
+      <form class="filters" id="af"><label>Level <select name="level">${['national', 'state', 'district'].map(l => `<option value="${l}" ${l === level ? 'selected' : ''}>${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select></label>
         <label>Indicator <select name="indicator">${data.indicators.map(i => `<option value="${esc(i.indicator)}" ${i.indicator === indicator ? 'selected' : ''}>${esc(i.indicator_label)}</option>`).join('')}</select></label><div class="actions"><button>Show</button></div></form>
-      ${table(['Area', { label: 'Value', num: true }, { label: 'Design SE', num: true }, { label: 'Design effect', num: true }, { label: 'Change', num: true }, { label: 'Persons 15+', num: true }], rows.map(r =>
-        `<tr><td>${esc(r.area_label)}</td><td class="num">${esc(indicatorValue(indicator, r.value))}</td><td class="num">${esc(indicatorValue(indicator, r.design_standard_error ?? r.srs_standard_error))}</td>
-         <td class="num">${r.design_effect == null ? '—' : Number(r.design_effect).toFixed(2)}</td><td class="num">${r.change == null ? '—' : esc(indicatorValue(indicator, r.change))}</td><td class="num">${n(r.persons_15plus)}</td></tr>`))}
-      <p class="small muted">Standard errors are design-based (FSU as primary sampling unit within strata).</p>
-      ${(data.limitations || []).map(l => `<p class="small muted">${esc(l)}</p>`).join('')}</div>`;
+      <span class="sep" aria-hidden="true"></span>
+      <div class="filters">
+        ${multiSector ? `<div class="ctl" role="group" aria-label="Sector"><span aria-hidden="true">Sector</span><div class="seg" id="atSector">${sectors.map(s => `<button type="button" data-sector="${esc(s)}" aria-pressed="${s === V.sector}">${esc(sectorName(s))}</button>`).join('')}</div></div>` : ''}
+        ${level === 'national' ? '' : `<label class="ctl">Area in focus <select class="field" id="atFocus">${hasNat ? '<option value="|">All India</option>' : ''}${placeList.map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select></label>`}
+      </div>
+    </div>
+    ${truncated ? infoBox(`<b>Only the first ${n(data.rows.length)} rows were returned</b> (the page limit), in State/UT and district order, so areas late in that order are missing from these views.`, 'amber') : ''}
+    <section class="kpis" id="atKpis" aria-label="Headline figures"></section>
+    <div class="at-grid">
+      <div class="panel">${panelHead(`${indLabel} over time`, 'map', '<span class="small muted" id="atTrendSub"></span>')}
+        <div class="legend" id="atTrendLegend"></div>
+        <div class="viz-box" id="atTrend"></div>
+        ${level === 'national' ? '' : `<div class="compare" id="atCompare" style="margin-top:10px"></div>`}
+        <p class="small muted" style="margin:10px 0 0">The shaded band is ±1.96 × the design-based standard error (falls back to the simple-random-sampling error when no design-based one exists). Use the arrow keys on the chart to read each period.</p>
+      </div>
+      <div class="panel">${panelHead(level === 'national' ? `Rural and urban — ${last}` : `Spread of areas — ${last}`, 'group', '<span class="small muted">all sectors</span>')}
+        <div class="viz-box" id="atSpread"></div>
+        <p class="small muted" style="margin:8px 0 0">${level === 'national' ? 'Bars show the value; whiskers show ±1.96 × standard error.' : 'Each dot is one area; the bar marks the median. The highlighted dot is the area in focus.'}</p>
+      </div>
+    </div>
+    <div class="panel">${panelHead('Unusual period-on-period changes', 'alert', `<span class="small muted">${n(notable.length)} ${notable.length === 1 ? 'change' : 'changes'}${notable.length > 100 ? ' · first 100 shown' : ''}</span>`)}
+      <p class="small muted">A change is shown when it stands out from the other areas' changes in the same period <i>and</i> exceeds three standard errors of the change. Changes listed by HSD as known events are marked as expected instead.</p>
+      ${notable.length ? `<div class="board-tools">
+        <div class="fchips" role="group" aria-label="Indicator" id="bInd"></div>
+        <div class="fchips" role="group" aria-label="Level" id="bLevel"></div>
+        <label class="ctl" style="flex-direction:row;align-items:center;gap:8px">Period <select class="field" id="bPeriod"><option value="">All</option>${[...new Map(notable.map(a => [a.period_index, a.period_label])).entries()].sort((a, b) => a[0] - b[0]).map(([, l]) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select></label>
+        <label class="ctl" style="flex-direction:row;align-items:center;gap:8px;margin-left:auto">Sort <select class="field" id="bSort"><option value="strength">Largest change ÷ SE</option><option value="screen">Screening order</option><option value="recent">Most recent</option><option value="area">Area</option></select></label></div>` : ''}
+      <div id="atBoard"></div></div>
+    ${level === 'national' ? '' : `<div class="toolbar" style="align-items:center">
+        <label class="ctl grow" style="flex:1 1 220px">Find an area <input class="field" type="search" id="atQ" placeholder="State/UT or district" autocomplete="off"></label>
+        <div class="ctl" role="group" aria-label="How many areas"><span aria-hidden="true">Show</span><div class="seg" id="atTop">${[[15, 'Top 15'], [30, 'Top 30'], [0, 'All']].map(([v, l]) => `<button type="button" data-top="${v}" aria-pressed="${v === V.top}">${l}</button>`).join('')}</div></div>
+        <div class="ctl" role="group" aria-label="Order"><span aria-hidden="true">Order</span><div class="seg" id="atOrder"><button type="button" data-order="desc" aria-pressed="true">Highest first</button><button type="button" data-order="asc" aria-pressed="false">Lowest first</button></div></div>
+        <span class="small muted" id="atCount"></span></div>
+      <div class="panel">${panelHead(`Areas ranked — ${last}`, 'list', '<span class="small muted" id="atRankSub"></span>')}
+        <div class="legend"><span><i class="k-sw" style="background:${VIZ.series[0]}"></i>value</span><span><i class="k-sw" style="background:#fff;outline:1px solid ${VIZ.series[0]};background-image:repeating-linear-gradient(45deg,${VIZ.series[0]} 0 1.5px,#fff 1.5px 4px)"></i>low precision</span><span><i class="k-ref"></i>All India (same sector)</span><span><i class="k-line" style="background:var(--ink-2);height:1.5px"></i>±1.96 × SE</span></div>
+        <div class="viz-box tall" id="atRank"></div></div>
+      <div class="panel">${panelHead('Change heatmap', 'clock', '<span class="small muted">areas × periods</span>')}
+        <div class="legend">${divLegend()}</div>
+        <div class="viz-box tall scroll" id="atHeat"></div>
+        <p class="small muted" style="margin:8px 0 0">Colour shows each period's change divided by its design-based standard error, so small, noisy areas do not dominate. Rows follow the ranking above. Focus the map and use the arrow keys to read each cell.</p></div>
+      <div class="panel">${panelHead('Small multiples', 'group', `<label class="ctl" style="flex-direction:row;align-items:center;gap:8px">Sort by <select class="field" id="atSm"><option value="value">Latest value</option><option value="change">Latest change</option><option value="vol">Volatility</option></select></label>`)}
+        <p class="small muted" style="margin:-4px 0 12px">One line per area over all periods, each on its own scale. Volatility is the spread (standard deviation) of period-on-period changes. Choose a card to put it in focus.</p>
+        <div class="sm-grid" id="atSmGrid"></div></div>`}
+    <div class="panel">${panelHead(`${indLabel} — ${last || ''}`, 'map', '<span class="small muted">every area this period</span>')}
+      <div id="atTable"></div>
+      <div class="about" style="margin-top:12px">
+        <p class="small muted">Standard errors are design-based (FSU as primary sampling unit within strata).</p>
+        <p class="small muted">${esc(precisionNote)}</p>
+        ${(data.limitations || []).map(l => `<p class="small muted">${esc(l)}</p>`).join('')}
+        ${data.periods?.length ? `<p class="small muted">Periods compared: ${esc(data.periods[0])} – ${esc(data.periods[data.periods.length - 1])}${data.design_period ? ` · sample design ${esc(data.design_period)}` : ''}.</p>` : ''}
+      </div></div>
+  </div>`;
   document.querySelector('#af').onsubmit = e => { e.preventDefault(); go(`#/areas?${new URLSearchParams(Object.fromEntries(new FormData(e.target)))}`); };
+  const root = document.querySelector('#at');
+  const $ = sel => root.querySelector(sel);
+
+  /* ---- 1. headline strip */
+  function drawKpis() {
+    const r = latestOf(V.focus, V.sector);
+    const low = precisionIssues(r);
+    const z = r?.change_over_design_se;
+    const arrow = r?.change > 0 ? '▲' : r?.change < 0 ? '▼' : '';
+    const unusualNow = notable.filter(a => a.indicator === indicator && a.level === level && a.period_index === lastIdx).length;
+    const unusualAll = notable.filter(a => a.indicator === indicator && a.level === level).length;
+    const latestRows = data.rows.filter(x => x.period_index === lastIdx && x.value != null);
+    const lowCount = latestRows.filter(x => precisionIssues(x).length).length;
+    const kpi = (icon_, lbl, value, sub) => `<div class="kpi"><span class="kpi-label">${icon(icon_)}${lbl}</span><span class="kpi-value">${value}</span><span class="kpi-sub">${sub}</span></div>`;
+    $('#atKpis').innerHTML = [
+      kpi('map', `${esc(nameOf(V.focus))} · ${esc(sectorName(V.sector))}`, `${esc(indicatorValue(indicator, r?.value))}${low.length ? '<span class="prec" title="' + esc(low.join('; ')) + '">low precision</span>' : ''}`,
+        r ? `${esc(r.period_label)} · ${esc(fmtSe(r))}` : 'No value for this area'),
+      kpi('arrow', 'Change vs previous period', r?.change == null ? '—' : `${esc(changeValue(indicator, r.change))}<span class="delta" aria-hidden="true">${arrow}</span>`,
+        r?.change == null ? (r?.change_reason ? esc(`Not comparable: ${String(r.change_reason).toLowerCase().replace(/_/g, ' ')}`) : 'No earlier period to compare') : `vs ${esc(periods[periods.findIndex(p => p[0] === r.period_index) - 1]?.[1] || 'previous period')} (${esc(indicatorValue(indicator, r.previous_value))})${z == null ? '' : ` · ${Number(z).toFixed(1)} × SE of the change`}`),
+      kpi('alert', `Unusual changes · ${esc(last)}`, n(unusualNow), `${n(unusualAll)} for this indicator at ${esc(LEVEL_NAME[level])} level · ${n(notable.length)} in all`),
+      kpi('group', 'Areas covered', n(new Set(latestRows.map(x => `${placeKey(x)}#${x.sector}`)).size), `${esc(LEVEL_NAME[level])} × sector in ${esc(last)} · ${n(lowCount)} low precision${truncated ? ' · list truncated' : ''}`),
+    ].join('');
+  }
+
+  /* ---- 2. trend chart */
+  function drawTrend() {
+    const list = [V.focus, ...V.compare];
+    const sets = V.compare.length || !multiSector
+      ? list.map((p, i) => ({ place: p, sector: V.sector, name: `${nameOf(p)}${multiSector ? ` · ${sectorName(V.sector)}` : ''}`, color: VIZ.series[i], band: i === 0, endLabel: i === 0 }))
+      : [{ place: V.focus, sector: V.sector, name: `${nameOf(V.focus)} · ${sectorName(V.sector)}`, color: VIZ.series[0], band: true, endLabel: true },
+        ...sectors.filter(s => s !== V.sector).map((s, i) => ({ place: V.focus, sector: s, name: `${nameOf(V.focus)} · ${sectorName(s)}`, color: VIZ.series[i + 1], dash: true }))];
+    const chartSeries = sets.map(s => ({ ...s, points: periods.map(([pi]) => { const r = get(s.place, s.sector, pi); return r ? { v: r.value, se: seOf(r), low: precisionIssues(r).length > 0, notable: !!r.notable_change, expected: !!r.expected_change_known_event, row: r } : { v: null }; }) }));
+    const used = chartSeries.flatMap(s => s.points);
+    $('#atTrendLegend').innerHTML = chartSeries.map(s => `<span><i class="${s.dash ? 'k-dash' : 'k-line'}" style="${s.dash ? `border-color:${s.color}` : `background:${s.color}`}"></i>${esc(s.name)}</span>`).join('')
+      + `<span><i class="k-band" style="background:${VIZ.series[0]}"></i>95% band</span>`
+      + (used.some(p => p.notable) ? '<span><i class="k-ring"></i>unusual change</span>' : '')
+      + (used.some(p => p.expected) ? '<span><i class="k-ring" style="border-style:dashed"></i>expected (known event)</span>' : '')
+      + (used.some(p => p.low) ? '<span><i class="k-low"></i>low precision</span>' : '');
+    $('#atTrendSub').textContent = periods.length ? `${periods.length} ${periods.length === 1 ? 'period' : 'periods'} · ${periods[0][1]}${periods.length > 1 ? ` – ${periods[periods.length - 1][1]}` : ''}` : '';
+    const box = $('#atTrend');
+    box.innerHTML = periods.length ? lineChart({ width: vizWidth(box), height: window.innerWidth < 720 ? 230 : 290, periods, series: chartSeries, indicator,
+      label: `${indLabel}, ${chartSeries.map(s => s.name).join(', ')}, by period. Values are listed in the table below and on each period's tooltip.`,
+      tipFor: (pi, lbl) => tipHtml(lbl, chartSeries.map(s => { const p = s.points[periods.findIndex(x => x[0] === pi)]; const r = p.row;
+        return { color: s.color, value: indicatorValue(indicator, p.v), label: s.name,
+          sub: r ? [fmtSe(r), `${n(r.persons_15plus)} persons 15+`, p.low ? 'low precision' : '', p.notable ? 'unusual change' : '', p.expected ? 'expected (known event)' : ''].filter(Boolean).join(' · ') : 'no value' }; })) })
+      : empty('No period is available for this indicator.');
+    roving(box);
+    const cmp = $('#atCompare');
+    if (cmp) {
+      const options = placeList.filter(p => p.key !== V.focus && !V.compare.includes(p.key));
+      cmp.innerHTML = `<span class="small muted">Compare:</span>${V.compare.map((k, i) => `<span class="cmp-chip"><i style="background:${VIZ.series[i + 1]}"></i>${esc(nameOf(k))}<button type="button" data-uncompare="${esc(k)}" aria-label="Remove ${esc(nameOf(k))} from the comparison">×</button></span>`).join('')}
+        ${V.compare.length < 3 ? `<select class="field" id="atAdd" aria-label="Add an area to compare" style="height:30px;max-width:240px"><option value="">Add an area…</option>${options.map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select>` : '<span class="small muted">up to 4 areas</span>'}`;
+      $('#atAdd')?.addEventListener('change', e => { if (e.target.value) { V.compare.push(e.target.value); drawTrend(); $('#atAdd')?.focus(); } });
+    }
+  }
+
+  /* ---- spread (State/District) or rural/urban bars (national) */
+  function drawSpread() {
+    const box = $('#atSpread');
+    if (level === 'national') {
+      const items = sectors.map((s, i) => { const r = latestOf('|', s); return { name: sectorName(s), v: r?.value, se: seOf(r), low: precisionIssues(r).length > 0, color: VIZ.series[i], tip: rowTip(`All India · ${sectorName(s)}`, r) }; });
+      box.innerHTML = rankChart({ width: vizWidth(box), items, indicator, label: `${indLabel}, rural and urban, ${last}: ${items.map(i => `${i.name} ${indicatorValue(indicator, i.v)}`).join(', ')}`, rowH: 34 });
+    } else {
+      const groups = sectors.map(s => ({ name: sectorName(s), values: [...places.values()].filter(p => p.key !== '|').map(p => ({ name: p.name, v: get(p.key, s, lastIdx)?.value, focus: p.key === V.focus })) }));
+      const summary = groups.map(g => `${g.name}: median ${indicatorValue(indicator, median(g.values.map(v => v.v)))} across ${g.values.filter(v => v.v != null).length} areas`).join('; ');
+      box.innerHTML = spreadChart({ width: vizWidth(box), groups, indicator, label: `${indLabel} by area, ${last}. ${summary}.` });
+    }
+    roving(box);
+  }
+
+  /* ---- 3. unusual-changes board */
+  function drawBoard() {
+    const board = $('#atBoard');
+    if (!notable.length) { board.innerHTML = empty('No unusual change.'); return; }
+    const B = V.board;
+    const count = pred => notable.filter(pred).length;
+    const indicators = [...new Set(notable.map(a => a.indicator))];
+    $('#bInd').innerHTML = [['all', 'All indicators', notable.length], ...indicators.map(k => [k, (data.indicators.find(i => i.indicator === k) || {}).indicator_label || notable.find(a => a.indicator === k).indicator_label, count(a => a.indicator === k)])]
+      .map(([k, l, c]) => `<button type="button" class="fchip" data-bind="${esc(k)}" aria-pressed="${B.ind === k}">${esc(trunc(String(l).replace(/ \(CWS, age 15\+\)| of salaried workers \(₹\)/g, ''), 34))} <span class="cnt">${n(c)}</span></button>`).join('');
+    const levels = ['national', 'state', 'district'].filter(l => notable.some(a => a.level === l));
+    $('#bLevel').innerHTML = [['all', 'All levels'], ...levels.map(l => [l, LEVEL_NAME[l]])].map(([k, l]) => `<button type="button" class="fchip" data-blevel="${k}" aria-pressed="${B.level === k}">${esc(l)}</button>`).join('');
+    let rows = notable.filter(a => (B.ind === 'all' || a.indicator === B.ind) && (B.level === 'all' || a.level === B.level) && (!B.period || a.period_label === B.period));
+    const absZ = a => Math.abs(a.change_over_design_se ?? 0);
+    if (B.sort === 'strength') rows = rows.slice().sort((a, b) => absZ(b) - absZ(a));
+    else if (B.sort === 'recent') rows = rows.slice().sort((a, b) => b.period_index - a.period_index || absZ(b) - absZ(a));
+    else if (B.sort === 'area') rows = rows.slice().sort((a, b) => String(a.area_label).localeCompare(String(b.area_label), 'en', { numeric: true }));
+    const maxZ = Math.max(4, ...rows.map(absZ));
+    const domains = {};
+    notable.forEach(a => { const d = domains[a.indicator] || (domains[a.indicator] = [Infinity, -Infinity]); [a.value, a.previous_value].forEach(v => { if (v != null) { d[0] = Math.min(d[0], v); d[1] = Math.max(d[1], v); } }); });
+    const dumbbell = a => {
+      const [lo, hi] = domains[a.indicator]; const pad = (hi - lo) * 0.06 || 1; const x = vscale(lo - pad, hi + pad, 6, 134);
+      if (a.previous_value == null || a.value == null) return '';
+      const x0 = x(a.previous_value), x1 = x(a.value);
+      return `<svg class="dumb" width="140" height="16" viewBox="0 0 140 16" aria-hidden="true"><line class="d-line" x1="${x0.toFixed(1)}" x2="${x1.toFixed(1)}" y1="8" y2="8"/><circle class="d-prev" cx="${x0.toFixed(1)}" cy="8" r="4.5"/><circle class="d-now" cx="${x1.toFixed(1)}" cy="8" r="5"/></svg>`;
+    };
+    const trendHref = a => `#/areas?${new URLSearchParams({ level: a.level, indicator: a.indicator, area: placeKey(a), sector: a.sector })}`;
+    board.innerHTML = table(['Area', 'Indicator · period', 'Before → Now', { label: 'Change ÷ SE', num: true }], rows.slice(0, 100).map(a => {
+      const z = a.change_over_design_se;
+      return `<tr><td><a href="${trendHref(a)}" title="Show this area's trend">${esc(a.area_label)}</a><div class="small muted">${esc(LEVEL_NAME[a.level] || a.level)}${a.expected_change_known_event ? ` ${chip('Expected (known event)', 'blue')}` : ''}</div></td>
+        <td>${esc(a.indicator_label)}<div class="small muted">${esc(a.period_label)}</div></td>
+        <td><div class="dumb-cell">${dumbbell(a)}<span class="dumb-vals">${esc(indicatorValue(a.indicator, a.previous_value))} → <b>${esc(indicatorValue(a.indicator, a.value))}</b> <span class="muted">(${esc(changeValue(a.indicator, a.change))})</span></span></div></td>
+        <td class="num"><div class="mag"><span class="mag-bar" aria-hidden="true"><i style="width:${(Math.min(1, Math.abs(z ?? 0) / maxZ) * 100).toFixed(1)}%"></i><s style="left:${((3 / maxZ) * 100).toFixed(1)}%" title="3 standard errors"></s></span><b>${z == null ? '—' : `${z > 0 ? '+' : z < 0 ? '−' : ''}${Math.abs(z).toFixed(1)}`}</b></div></td></tr>`;
+    }), { empty: 'No unusual change matches these filters.' })
+      + `<p class="small muted" style="margin-top:8px">${n(Math.min(rows.length, 100))} of ${n(rows.length)} shown. Before → Now: hollow dot is the previous period, filled dot is the period of the change; the bar shows the change in standard errors, with the mark at 3.</p>`;
+  }
+
+  /* ---- 4–6. ranking, heatmap and small multiples share one filtered, ordered list of places */
+  function shownPlaces() {
+    const q = V.q.trim().toLowerCase();
+    const list = placeList.filter(p => !q || p.name.toLowerCase().includes(q))
+      .map(p => ({ ...p, r: get(p.key, V.sector, lastIdx) }))
+      .sort((a, b) => (a.r?.value == null) - (b.r?.value == null) || (V.order === 'asc' ? 1 : -1) * ((a.r?.value ?? 0) - (b.r?.value ?? 0)));
+    return { all: list, shown: V.top ? list.slice(0, V.top) : list };
+  }
+  function drawRank() {
+    const { all, shown } = shownPlaces();
+    $('#atCount').textContent = `${n(shown.length)} of ${n(all.length)} areas · ${sectorName(V.sector)}`;
+    const natR = get('|', V.sector, lastIdx);
+    $('#atRankSub').textContent = `${sectorName(V.sector)} · ${V.order === 'asc' ? 'lowest' : 'highest'} first`;
+    const box = $('#atRank');
+    box.innerHTML = rankChart({ width: vizWidth(box), indicator, ref: natR ? { v: natR.value, label: 'All India' } : null,
+      label: `${indLabel} by area, ${last}, ${sectorName(V.sector)}. ${shown.length} areas shown; values are also in the table below.`,
+      items: shown.map(p => ({ key: p.key, name: p.name, v: p.r?.value, se: seOf(p.r), low: precisionIssues(p.r).length > 0, focus: p.key === V.focus,
+        tip: rowTip(p.name, p.r) + (precisionIssues(p.r).length ? `<div class="t-sub">${esc(precisionIssues(p.r).join('; '))}</div>` : '') })) });
+    roving(box);
+    const heat = $('#atHeat');
+    heat.innerHTML = heatmap({ width: vizWidth(heat), periods, label: `Change divided by its standard error, ${shown.length} areas by ${periods.length} periods, ${sectorName(V.sector)}.`,
+      rows: shown.map(p => ({ key: p.key, name: p.name, focus: p.key === V.focus })),
+      cell: (row, pi, lbl) => { const r = get(row.key, V.sector, pi); const z = r?.change_over_design_se;
+        return { z, present: !!r, notable: !!r?.notable_change,
+          tip: tipHtml(`${row.name} · ${lbl}`, [{ value: r?.change == null ? 'not assessable' : changeValue(indicator, r.change), label: z == null ? '' : `${Number(z).toFixed(1)} × SE`,
+            sub: r ? `${indicatorValue(indicator, r.previous_value)} → ${indicatorValue(indicator, r.value)}${r.notable_change ? ' · unusual change' : ''}${precisionIssues(r).length ? ' · low precision' : ''}` : 'no value' }]) }; } });
+    roving(heat);
+    drawSm(all);
+  }
+  function drawSm(all) {
+    const stats = all.map(p => {
+      const vals = periods.map(([pi]) => get(p.key, V.sector, pi)?.value ?? null);
+      const changes = periods.map(([pi]) => get(p.key, V.sector, pi)?.change).filter(c => c != null);
+      const mean = changes.reduce((s, c) => s + c, 0) / (changes.length || 1);
+      const vol = changes.length > 1 ? Math.sqrt(changes.reduce((s, c) => s + (c - mean) ** 2, 0) / (changes.length - 1)) : null;
+      return { ...p, vals, vol };
+    });
+    const key = { value: s => s.r?.value, change: s => (s.r?.change == null ? null : Math.abs(s.r.change)), vol: s => s.vol }[V.sm];
+    stats.sort((a, b) => (key(a) == null) - (key(b) == null) || (key(b) ?? 0) - (key(a) ?? 0));
+    const shown = V.top ? stats.slice(0, V.top) : stats;
+    $('#atSmGrid').innerHTML = shown.map(s => `<button type="button" class="sm ${s.key === V.focus ? 'focus' : ''}" data-focus="${esc(s.key)}" aria-label="${esc(`${s.name}: ${indicatorValue(indicator, s.r?.value)}, change ${changeValue(indicator, s.r?.change)}. Put in focus.`)}">
+        <span class="sm-name" title="${esc(s.name)}">${esc(s.name)}</span>
+        <span class="sm-row"><span class="sm-val">${esc(indicatorValue(indicator, s.r?.value))}</span><span class="sm-chg">${esc(changeValue(indicator, s.r?.change))}${s.vol == null ? '' : ` · σ ${esc(changeValue(indicator, s.vol).replace(/^\+/, ''))}`}</span></span>
+        ${sparkline(s.vals, { w: 166, lowLast: precisionIssues(s.r).length > 0 })}${precisionIssues(s.r).length ? '<span class="prec" style="align-self:flex-start;margin-top:4px">low precision</span>' : ''}</button>`).join('') || empty('No area matches.');
+  }
+
+  /* ---- values table (all sectors, latest period) */
+  function drawTable() {
+    const q = V.q.trim().toLowerCase();
+    const rows = data.rows.filter(r => r.period_index === lastIdx && (!q || String(r.area_label).toLowerCase().includes(q)));
+    $('#atTable').innerHTML = table(['Area', { label: 'Value', num: true }, { label: 'Design SE', num: true }, { label: 'Design effect', num: true }, { label: 'Change', num: true }, { label: 'Persons 15+', num: true }, 'Precision'], rows.map(r =>
+      `<tr><td>${esc(r.area_label)}</td><td class="num">${esc(indicatorValue(indicator, r.value))}</td><td class="num">${esc(indicatorValue(indicator, r.design_standard_error ?? r.srs_standard_error))}</td>
+       <td class="num">${r.design_effect == null ? '—' : Number(r.design_effect).toFixed(2)}</td><td class="num">${r.change == null ? '—' : esc(changeValue(indicator, r.change))}</td><td class="num">${n(r.persons_15plus)}</td>
+       <td>${precisionIssues(r).length ? `<span class="prec" title="${esc(precisionIssues(r).join('; '))}">low precision</span>` : ''}</td></tr>`));
+  }
+
+  function drawAll() { drawKpis(); drawTrend(); drawSpread(); drawBoard(); if (level !== 'national') drawRank(); drawTable(); }
+  const setFocus = key => { V.focus = key; V.compare = V.compare.filter(k => k !== key); const sel = $('#atFocus'); if (sel) sel.value = key; drawKpis(); drawTrend(); drawSpread(); if (level !== 'national') drawRank(); };
+  drawAll();
+  const focusSel = $('#atFocus');
+  if (focusSel) { focusSel.value = V.focus; focusSel.onchange = () => setFocus(focusSel.value); }
+  root.addEventListener('click', e => {
+    const t = e.target.closest('button, [data-focus]');
+    if (!t || !root.contains(t)) return;
+    if (t.dataset.sector) { V.sector = t.dataset.sector; root.querySelectorAll('[data-sector]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); drawKpis(); drawTrend(); if (level !== 'national') drawRank(); }
+    else if (t.dataset.top != null) { V.top = Number(t.dataset.top); root.querySelectorAll('[data-top]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); drawRank(); }
+    else if (t.dataset.order) { V.order = t.dataset.order; root.querySelectorAll('[data-order]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); drawRank(); }
+    else if (t.dataset.bind) { V.board.ind = t.dataset.bind; drawBoard(); }
+    else if (t.dataset.blevel) { V.board.level = t.dataset.blevel; drawBoard(); }
+    else if (t.dataset.uncompare) { V.compare = V.compare.filter(k => k !== t.dataset.uncompare); drawTrend(); }
+    else if (t.dataset.focus != null) setFocus(t.dataset.focus);
+  });
+  root.addEventListener('keydown', e => { const t = e.target.closest?.('g[data-focus]'); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setFocus(t.dataset.focus); } });
+  $('#bPeriod')?.addEventListener('change', e => { V.board.period = e.target.value; drawBoard(); });
+  $('#bSort')?.addEventListener('change', e => { V.board.sort = e.target.value; drawBoard(); });
+  $('#atSm')?.addEventListener('change', e => { V.sm = e.target.value; drawRank(); });
+  let qTimer;
+  $('#atQ')?.addEventListener('input', e => { clearTimeout(qTimer); qTimer = setTimeout(() => { V.q = e.target.value; drawRank(); drawTable(); }, 160); });
+  vizRedraw = () => { if (location.hash.startsWith('#/areas') && document.body.contains(root)) { drawTrend(); drawSpread(); if (level !== 'national') drawRank(); } };
 }
 
-/* ------------------------------------------------------------ decisions */
+// Share of each decision among the rows shown (counts of the stored decisions; nothing else).
+function decisionMix(rows) {
+  const counts = {};
+  rows.forEach(x => { counts[x.decision] = (counts[x.decision] || 0) + 1; });
+  const parts = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const tone = k => DECISION_CHIP[k] || 'none';
+  return `<div class="panel"><div class="stack" role="img" aria-label="${esc(parts.map(([k, v]) => `${S.labels.decisions[k] || k}: ${v}`).join(', '))}">${parts.map(([k, v]) =>
+      `<i class="${tone(k)}" style="flex:${v}" title="${esc(S.labels.decisions[k] || k)}: ${n(v)}"></i>`).join('')}</div>
+    <div class="stack-legend">${parts.map(([k, v]) => `<span><i class="${tone(k)}" style="background:var(--${tone(k) === 'none' ? 'line-2' : tone(k)})"></i>${esc(S.labels.decisions[k] || k)} <b>${n(v)}</b> <span class="muted">${pct(v, rows.length)}</span></span>`).join('')}</div></div>`;
+}
 
 async function reviewed(_, params) {
   crumbs(['Decisions']);
@@ -479,6 +1014,7 @@ async function reviewed(_, params) {
   app.innerHTML = `${pageHead({ eyebrow: 'Audit trail', title: 'Decisions',
       lede: 'Every decision recorded for the selected run, newest first. Decisions are appended to a hash-chained audit trail and never overwrite survey data.' })}
     <form class="filters toolbar" id="rf"><label>Decision <select name="decision"><option value="">All</option>${Object.entries(S.labels.decisions).filter(([k]) => k !== 'UNREVIEWED').map(([k, v]) => `<option value="${k}" ${k === decision ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label><div class="actions"><button>Show</button></div></form>
+    ${!decision && data.rows.length ? decisionMix(data.rows) : ''}
     <div class="result-head"><span class="count">${n(data.rows.length)} ${data.rows.length === 1 ? 'decision' : 'decisions'}</span></div>
     ${table(['Case', 'Area', 'Decision', 'Reason', 'Verified by', 'Correction', 'By', 'When', { label: 'Minutes on case', num: true }], data.rows.map(x =>
       `<tr><td><a href="#/case/${encodeURIComponent(x.case_id)}">${esc(x.record_label)}</a></td><td>${esc(x.location_label)}</td><td>${decisionChip(x.decision)}</td><td>${esc(x.reason_label || '')}${x.comment ? `<div class="small muted">${esc(x.comment)}</div>` : ''}</td>
@@ -960,7 +1496,7 @@ function modebar() {
   const el = document.querySelector('#modebar');
   el.innerHTML = parts.length ? `<div class="modebar-row">${parts.join('')}</div>` : '';
   el.classList.toggle('hidden', !parts.length);
-  if (d.review_only) { const link = document.querySelector('#nav a[data-route="batch"]'); if (link) link.textContent = 'Batch validation (separate)'; }
+  if (d.review_only) { const link = document.querySelector('#nav a[data-route="batch"]'); if (link) (link.querySelector('.nav-label') || link).textContent = 'Batch validation (separate)'; }
   if (d.audit_writable === false && !S.user) {   // nothing is recorded here, so a typed reviewer name has no use
     reviewerInput.closest('.tool').classList.add('hidden');
     document.querySelector('#verified').textContent = 'read-only access';
@@ -979,6 +1515,8 @@ function signIn() {
   });
 }
 
+// The skip link must not change the hash (the hash is the route), so it moves focus instead.
+document.querySelector('.skip-link')?.addEventListener('click', e => { e.preventDefault(); document.querySelector('#main').focus(); });
 runSelect.onchange = () => { S.run = runSelect.value; S.filters = {}; S.page = 1; S.ov = null; store.set('l:MoSPI.run', S.run); route(); };
 reviewerInput.value = store.get('l:MoSPI.reviewer', '');
 reviewerInput.onchange = () => store.set('l:MoSPI.reviewer', reviewer());
