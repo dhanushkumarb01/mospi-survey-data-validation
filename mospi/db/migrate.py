@@ -1,7 +1,7 @@
 """Apply the numbered SQL migrations and the role grants (run by an operator with the admin connection).
 
     python -m mospi.db.migrate              # apply pending migrations, then (re)apply grants
-    python -m mospi.db.migrate --roles      # also create/update the login roles mospi_app and mospi_reader
+    python -m mospi.db.migrate --roles      # also create/update the login roles (mospi_app, mospi_reader, optional mospi_reviewer)
     python -m mospi.db.migrate --status     # list applied and pending migrations; change nothing
 
 Rules
@@ -10,12 +10,21 @@ Rules
 * A transaction-scoped advisory lock serialises concurrent runners.
 * Nothing here drops or rewrites data.  The web application never runs migrations at start-up.
 
-Roles (least privilege; passwords from ``MOSPI_DB_APP_PASSWORD`` / ``MOSPI_DB_READER_PASSWORD``):
+Roles (least privilege; passwords from ``MOSPI_DB_APP_PASSWORD`` / ``MOSPI_DB_READER_PASSWORD`` / ``MOSPI_DB_REVIEWER_PASSWORD``):
 * ``mospi_app``    local app and worker: INSERT/SELECT on the audit trail (no UPDATE/DELETE), read/write ledgers.
 * ``mospi_reader`` hosted instance: SELECT on the ``hosted_*`` views only, read-only sessions, connection limit.
+* ``mospi_reviewer`` hosted decisions (optional; created when ``MOSPI_DB_REVIEWER_PASSWORD`` is set): INSERT on
+  ``audit_events``, SELECT on its id and hash columns only (never comments, snapshots or corrected values) and on
+  ``hosted_runs``.  Row level security limits inserts to chained decision/case-view/chain-start events of hosted runs,
+  outside the operations trail, by a signed-in actor.  No UPDATE, no DELETE, no other table: a hosted decision can be
+  added but never changed or removed.
+* Accounts (0005_users.sql): ``mospi_app`` reads and writes ``app_users`` (a trigger refuses any administrator change
+  from it) and appends to ``auth_events``; the reader may only EXECUTE the two sign-in look-up functions, the reviewer
+  the two that record a sign-in outcome and a password change.  Administrators come only from this admin connection.
 
 Supabase hardening (applied with the grants, idempotent): row level security is enabled on every table of the schema,
-with a policy only for ``mospi_app`` (the views run as their owner, so the reader sees rows only through them); every
+with a policy for ``mospi_app`` and two narrow ones for ``mospi_reviewer`` (the views run as their owner, so the reader
+sees rows only through them); every
 privilege on the schema and its objects is revoked from PUBLIC and from Supabase's ``anon``/``authenticated``/
 ``service_role`` roles, including default privileges for future objects.
 """
@@ -31,9 +40,15 @@ from .config import load_env_file
 from .connection import Database, DatabaseUnavailable
 
 MIGRATIONS = Path(__file__).with_name("migrations")
-APP_ROLE, READER_ROLE = "mospi_app", "mospi_reader"
-APP_WRITE = ("datasets", "dataset_files", "runs", "jobs", "notifications")
-APP_APPEND = ("audit_events", "audit_verifications", "job_events", "integrity_checks")
+APP_ROLE, READER_ROLE, REVIEWER_ROLE = "mospi_app", "mospi_reader", "mospi_reviewer"
+REVIEWER_EVENTS = ("DECISION_MADE", "CASE_VIEWED", "AUDIT_CHAIN_STARTED")
+# All the hosted writer reads: enough to find the chain head, the next event id and the latest decision on a case.
+REVIEWER_COLUMNS = ("run_id", "event_id", "case_id", "event_type", "event_hash")
+APP_WRITE = ("datasets", "dataset_files", "runs", "jobs", "notifications", "app_users")
+APP_APPEND = ("audit_events", "audit_verifications", "job_events", "integrity_checks", "auth_events")
+# Hosted sign-in (0005_users.sql): the reader looks accounts up, the optional reviewer records outcomes and password changes.
+READER_FUNCTIONS = ("auth_login_record(text)", "auth_session_record(bigint)")
+REVIEWER_FUNCTIONS = ("auth_note_attempt(text, boolean)", "auth_change_password(bigint, text, text)")
 APP_READ = ("audit_migrations", "schema_migrations")
 HOSTED_VIEWS = ("hosted_runs", "hosted_audit_events", "hosted_audit_verifications", "hosted_jobs", "hosted_integrity_checks",
                 "hosted_serving_files", "hosted_serving_chunks", "hosted_schema_version")
@@ -95,12 +110,17 @@ def _has_table(db: Database, name: str) -> bool:
 
 
 def ensure_roles(db: Database) -> None:
-    """Create or update the two login roles (passwords from the environment; never printed)."""
+    """Create or update the login roles (passwords from the environment; never printed).  mospi_reviewer only when its password is set."""
     from psycopg import sql
     passwords = {APP_ROLE: os.environ.get("MOSPI_DB_APP_PASSWORD", ""), READER_ROLE: os.environ.get("MOSPI_DB_READER_PASSWORD", "")}
     for role, password in passwords.items():
         if len(password) < 24:
             raise MigrationError(f"Set a strong password (24+ characters) for {role} in MOSPI_DB_{'APP' if role == APP_ROLE else 'READER'}_PASSWORD.")
+    reviewer_password = os.environ.get("MOSPI_DB_REVIEWER_PASSWORD", "")
+    if reviewer_password:
+        if len(reviewer_password) < 24:
+            raise MigrationError("Set a strong password (24+ characters) for mospi_reviewer in MOSPI_DB_REVIEWER_PASSWORD.")
+        passwords[REVIEWER_ROLE] = reviewer_password
     with db.transaction() as connection:
         for role, password in passwords.items():
             exists = connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
@@ -109,6 +129,10 @@ def ensure_roles(db: Database) -> None:
                 _identifier(role), sql.Literal(password)))
         connection.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT 20").format(_identifier(READER_ROLE)))
         connection.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT 30").format(_identifier(APP_ROLE)))
+        if REVIEWER_ROLE in passwords:
+            connection.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT 10").format(_identifier(REVIEWER_ROLE)))
+            connection.execute(sql.SQL("ALTER ROLE {} SET statement_timeout = '15s'").format(_identifier(REVIEWER_ROLE)))
+            connection.execute(sql.SQL("ALTER ROLE {} SET idle_in_transaction_session_timeout = '30s'").format(_identifier(REVIEWER_ROLE)))
         connection.execute(sql.SQL("ALTER ROLE {} SET default_transaction_read_only = on").format(_identifier(READER_ROLE)))
         connection.execute(sql.SQL("ALTER ROLE {} SET statement_timeout = '15s'").format(_identifier(READER_ROLE)))
         connection.execute(sql.SQL("ALTER ROLE {} SET idle_in_transaction_session_timeout = '30s'").format(_identifier(READER_ROLE)))
@@ -119,7 +143,7 @@ def apply_grants(db: Database) -> None:
     """Least-privilege grants on the configured schema (idempotent).  Skipped for roles that do not exist yet."""
     from psycopg import sql
     with db.transaction() as connection:
-        roles = {r["rolname"] for r in connection.execute("SELECT rolname FROM pg_roles WHERE rolname IN (%s, %s)", (APP_ROLE, READER_ROLE))}
+        roles = {r["rolname"] for r in connection.execute("SELECT rolname FROM pg_roles WHERE rolname IN (%s, %s, %s)", (APP_ROLE, READER_ROLE, REVIEWER_ROLE))}
         schema = _identifier(db.schema)
         connection.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM PUBLIC").format(schema))
         connection.execute(sql.SQL("REVOKE ALL ON SCHEMA {} FROM PUBLIC").format(schema))
@@ -147,7 +171,24 @@ def apply_grants(db: Database) -> None:
             connection.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(schema, reader))
             for view in HOSTED_VIEWS:
                 connection.execute(sql.SQL("GRANT SELECT ON {}.{} TO {}").format(schema, _identifier(view), reader))
+            _grant_functions(connection, schema, READER_FUNCTIONS, reader)
+        if REVIEWER_ROLE in roles:
+            reviewer = _identifier(REVIEWER_ROLE)
+            connection.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(schema, reviewer))   # column grants too
+            connection.execute(sql.SQL("GRANT INSERT ON {}.audit_events TO {}").format(schema, reviewer))
+            connection.execute(sql.SQL("GRANT SELECT ({}) ON {}.audit_events TO {}").format(
+                sql.SQL(", ").join(_identifier(c) for c in REVIEWER_COLUMNS), schema, reviewer))
+            connection.execute(sql.SQL("GRANT SELECT ON {}.hosted_runs TO {}").format(schema, reviewer))   # the policies' run check
+            _grant_functions(connection, schema, REVIEWER_FUNCTIONS, reviewer)
         _harden(connection, db.schema, roles)
+
+
+def _grant_functions(connection, schema, signatures: tuple[str, ...], role) -> None:
+    """EXECUTE on named functions only (signatures are constants above, never input)."""
+    from psycopg import sql
+    for signature in signatures:
+        name, _, arguments = signature.partition("(")
+        connection.execute(sql.SQL("GRANT EXECUTE ON FUNCTION {}.{}(" + arguments + " TO {}").format(schema, _identifier(name), role))
 
 
 def _harden(connection, schema_name: str, roles: set[str]) -> None:
@@ -173,6 +214,18 @@ def _harden(connection, schema_name: str, roles: set[str]) -> None:
                 # Row filtering is not the control here (grants are); the policy only lets the granted statements see rows.
                 connection.execute(sql.SQL("CREATE POLICY mospi_app_access ON {}.{} TO {} USING (true) WITH CHECK (true)").format(
                     schema, _identifier(table), _identifier(APP_ROLE)))
+    if REVIEWER_ROLE in roles:
+        # Hosted decisions: the grants allow INSERT and a few columns of SELECT on audit_events; these policies narrow the
+        # rows to runs cleared for hosting (never the operations trail), and inserts to chained review events by a signed-in
+        # actor.  Dropped and re-created each time, so a changed rule always takes effect.
+        audit, reviewer = _identifier("audit_events"), _identifier(REVIEWER_ROLE)
+        hosted_run = sql.SQL("run_id <> '__operations__' AND run_id IN (SELECT run_id FROM {}.hosted_runs)").format(schema)
+        for name in ("mospi_reviewer_read", "mospi_reviewer_insert"):
+            connection.execute(sql.SQL("DROP POLICY IF EXISTS {} ON {}.{}").format(_identifier(name), schema, audit))
+        connection.execute(sql.SQL("CREATE POLICY mospi_reviewer_read ON {}.{} FOR SELECT TO {} USING ({})").format(schema, audit, reviewer, hosted_run))
+        connection.execute(sql.SQL("CREATE POLICY mospi_reviewer_insert ON {}.{} FOR INSERT TO {} WITH CHECK ({} AND event_type IN ({}) "
+                                   "AND event_hash IS NOT NULL AND origin = 'postgres' AND actor_authenticated = 1)").format(
+            schema, audit, reviewer, hosted_run, sql.SQL(", ").join(sql.Literal(e) for e in REVIEWER_EVENTS)))
 
 
 def admin_database() -> Database:
@@ -185,7 +238,7 @@ def admin_database() -> Database:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Apply MoSPI PostgreSQL migrations and grants.")
-    parser.add_argument("--roles", action="store_true", help="create or update the mospi_app and mospi_reader login roles")
+    parser.add_argument("--roles", action="store_true", help="create or update the login roles (mospi_reviewer only when MOSPI_DB_REVIEWER_PASSWORD is set)")
     parser.add_argument("--status", action="store_true", help="show applied and pending migrations only")
     args = parser.parse_args()
     try:

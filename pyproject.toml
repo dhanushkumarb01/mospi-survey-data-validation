@@ -1,4 +1,4 @@
-# Used by Vercel only (docs/VERCEL_REVIEW_ONLY_DEPLOYMENT.md): the hosted, review-only serving set.  Docker and local
+# Used by Vercel only (docs/deployment/VERCEL_REVIEW_ONLY_DEPLOYMENT.md): the hosted, review-only serving set.  Docker and local
 # installs use requirements.txt (the full pipeline).  Every pin here must equal the one in requirements.txt, and the
 # packages the hosted path never imports (pyarrow, scipy, scikit-learn, uvicorn) are left out, which keeps the function
 # under Vercel's standard 250 MB bundle size: above it, dependencies are unpacked into /tmp at run time and the space

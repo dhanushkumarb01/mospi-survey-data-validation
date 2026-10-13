@@ -1,4 +1,4 @@
-"""Copy every SQLite review/audit store into PostgreSQL without changing it (implementation_plan.md §11).
+"""Copy every SQLite review/audit store into PostgreSQL without changing it (docs/deployment/POSTGRESQL.md §5).
 
     python -m mospi.db.migrate_audit --dry-run     # everything except the final commit
     python -m mospi.db.migrate_audit               # migrate, verify, record

@@ -1,9 +1,10 @@
 """Routes of the Upload & validate page, the jobs ledger, integrity checks and alerts.
 
 Authorisation (on top of the sign-in middleware of api.py):
-* sign-in is mandatory for every route that changes state, even on a loopback instance;
-* uploads, pre-flight, starting validation, retry, cancel and manual checks: ``admin`` only;
-* reading datasets, jobs, checks and alerts: ``admin`` and ``technical``; the dashboard status (``/api/operations``): any role.
+* sign-in is mandatory for every route here, even on a loopback instance;
+* uploads, pre-flight, starting validation, retry, cancel and manual checks: the ``run`` capability (administrators);
+* reading datasets, jobs, checks and alerts: the ``operations`` capability (administrators and analysts); the dashboard
+  status (``/api/operations``): any role.
 * never on a hosted or review-only instance: those have no operations store that can be written.
 """
 from __future__ import annotations
@@ -13,31 +14,32 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
 
-READERS = {"admin", "technical"}
-WRITERS = {"admin"}
+from mospi.auth import can
+
+READERS = "operations"
+WRITERS = "run"
 UNAVAILABLE = ("Upload & validate runs on the processing machine with the PostgreSQL operational store "
                "(MOSPI_DATABASE_URL); it is not available on this instance.")
 
 
-def register(app: FastAPI, *, operations: Any, users: dict[str, Any], review_only: bool) -> None:
+def register(app: FastAPI, *, operations: Any, signed_in: bool, review_only: bool) -> None:
     from mospi.ingest.service import OperationError
     from mospi.ingest.storage import FileReceiver, UploadRejected, safe_display_name, safe_relative_path
 
     writable = operations is not None and not getattr(operations, "hosted", True) and not review_only
 
-    def user_for(request: Request, roles: set[str]) -> dict[str, Any]:
+    def user_for(request: Request, capability: str) -> dict[str, Any]:
         user = getattr(request.state, "user", None)
-        if not users:
-            raise HTTPException(403, "Sign-in is required for this action. Configure named users (MOSPI_USERS_FILE) so every upload and "
-                                     "validation is attributed to a verified person.")
+        if not signed_in:
+            raise HTTPException(403, "Sign-in is required for this action, so that every upload and validation is attributed to a verified person.")
         if user is None:
             raise HTTPException(401, "Authentication required.")
-        if user["role"] not in roles:
-            raise HTTPException(403, "Your role cannot do this." if roles == WRITERS else "Your role cannot see operational records.")
+        if not can(user, capability):
+            raise HTTPException(403, "Your role cannot do this." if capability == WRITERS else "Your role cannot see operational records.")
         return user
 
-    def local(request: Request, roles: set[str]) -> dict[str, Any]:
-        user = user_for(request, roles)
+    def local(request: Request, capability: str) -> dict[str, Any]:
+        user = user_for(request, capability)
         if not writable:
             raise HTTPException(404 if operations is None else 403, UNAVAILABLE)
         return user

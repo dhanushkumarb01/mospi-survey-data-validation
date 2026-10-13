@@ -3,8 +3,9 @@
 * ``sqlite`` (default): per-run ``review_audit.sqlite``, exactly as V2.2; no upload page.
 * ``postgres``: PostgreSQL (``MOSPI_DATABASE_URL``).  The local instance refuses to start while migrations are
   pending, or while a SQLite store holds review history that was never migrated (or changed after migration),
-  so the two stores can never silently diverge.  The hosted instance (Vercel) uses the read-only reader role and
-  the ``hosted_*`` views only, on the Supabase transaction pooler (docs/deployment/POSTGRESQL.md).
+  so the two stores can never silently diverge.  The hosted instance (Vercel) reads through the reader role and the
+  ``hosted_*`` views only, on the Supabase transaction pooler (docs/deployment/POSTGRESQL.md).  When
+  ``MOSPI_REVIEW_DATABASE_URL`` (the insert-only ``mospi_reviewer`` role) is set it also records review decisions.
 """
 from __future__ import annotations
 
@@ -14,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from mospi.db.config import load_env_file
+
+
+REVIEW_URL_VARIABLE = "MOSPI_REVIEW_DATABASE_URL"
 
 
 class BackendError(RuntimeError):
@@ -72,7 +76,8 @@ def build(fusion_root: Path, project_root: Path, *, hosted: bool) -> tuple[Any, 
         raise BackendError("MOSPI_AUDIT_BACKEND=postgres needs MOSPI_DATABASE_URL.")
     if hosted:
         from mospi.ingest.service import HostedOperations
-        return PostgresAuditStore(db, hosted=True), HostedOperations(db)
+        writer = database_from_env(REVIEW_URL_VARIABLE, application_name="mospi-hosted-review")
+        return PostgresAuditStore(db, hosted=True, writer=writer), HostedOperations(db)
     from mospi.ingest.service import Operations
     startup_check(db, fusion_root)
     return PostgresAuditStore(db), Operations(db, root=project_root)

@@ -7,7 +7,7 @@
 <title>MoSPI · Survey Data Validation</title>
 <meta name="description" content="Intelligent Survey Data Validation Platform — supervisor review workspace for PLFS (HSD, NSO, MoSPI).">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233355e0'/%3E%3Cpath d='M9 22V10h3v12zm6 0V14h3v8zm6 0v-5h3v5z' fill='%23ffffff'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/assets/styles.css?v=20261012-ui5">
+<link rel="stylesheet" href="/assets/styles.css?v=20261013-auth2">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -17,6 +17,7 @@
     <span class="brand-mark" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 32 32"><path d="M6 26V8h4v18zm8 0V14h4v12zm8 0v-8h4v8z" fill="#ffffff"/></svg></span>
     <span class="brand-text"><b>MoSPI</b><span class="brand-name">Survey Data Validation</span><span class="brand-tag">PLFS</span></span>
   </a>
+  <label class="side-run hidden" id="runPick"><span>Survey round</span><select id="runSelect"></select></label>
   <nav id="nav" class="navbar" aria-label="Main">
     <p class="nav-section" aria-hidden="true">Review</p>
     <a href="#/overview" data-route="overview"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/></svg><span class="nav-label">Overview</span></a>
@@ -25,30 +26,26 @@
     <a href="#/groups" data-route="groups"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Group alerts (FSU)</span></a>
     <a href="#/areas" data-route="areas"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/></svg><span class="nav-label">Area trends</span></a>
     <a href="#/reviewed" data-route="reviewed"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><span class="nav-label">Decisions</span></a>
-    <span class="nav-sep" aria-hidden="true"></span>
-    <p class="nav-section" aria-hidden="true">Operations</p>
-    <a href="#/upload" data-route="upload"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><span class="nav-label">Upload &amp; validate</span></a>
-    <a href="#/batch" data-route="batch"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></svg><span class="nav-label">Batch validation</span></a>
+    <span class="nav-sep" data-needs="operations" aria-hidden="true"></span>
+    <p class="nav-section" data-needs="operations" aria-hidden="true">Operations</p>
+    <a href="#/upload" data-route="upload" data-needs="operations"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><span class="nav-label">Upload &amp; validate</span></a>
+    <a href="#/batch" data-route="batch" data-needs="operations"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></svg><span class="nav-label">Batch validation</span></a>
+    <p class="nav-section hidden" data-needs="manage_users" aria-hidden="true">Administration</p>
+    <a href="#/users" data-route="users" data-needs="manage_users" class="hidden"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c.6-3.4 3-5.2 6-5.2s5.4 1.8 6 5.2"/><path d="M16 5.2a3 3 0 0 1 0 5.7M18 14.9c1.6.7 2.6 2.4 3 5.1"/></svg><span class="nav-label">Users</span></a>
     <p class="nav-section" aria-hidden="true">Reference</p>
     <a href="#/technical" data-route="technical" class="secondary"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/></svg><span class="nav-label">Technical reference</span></a>
   </nav>
-  <div class="sidebar-foot"><b>MoSPI</b><span>Intelligent Survey Data Validation Platform</span><span class="brand-tag">PLFS</span></div>
-</aside>
-<div class="main-col">
-<header class="topbar">
-  <div class="mast">
-    <div class="topbar-row">
-      <div class="top-tools">
-        <label class="tool"><span>Survey round</span><select id="runSelect" aria-label="Survey round"></select></label>
-        <label class="tool"><span>Reviewing as</span><input id="reviewer" placeholder="Your name" autocomplete="name" aria-label="Reviewing as"></label>
-        <span id="verified" class="user-state"></span>
-        <span id="modePill" class="mode-pill hidden"></span>
-      </div>
+  <div class="side-foot">
+    <span id="modePill" class="mode-pill hidden"></span>
+    <div id="account" class="account hidden">
+      <div class="account-id"><span class="avatar" id="accountInitials" aria-hidden="true"></span><span class="account-text"><b id="accountName"></b><span id="accountRole"></span></span></div>
+      <div class="account-actions"><button type="button" class="link" id="pwButton">Change password</button><button type="button" class="link" id="signOut">Sign out</button></div>
     </div>
   </div>
-  <div id="modebar" class="modebar hidden" role="note"></div>
-  <div id="opsbar" class="opsbar hidden" role="status"></div>
-</header>
+</aside>
+<div class="main-col">
+<div id="modebar" class="modebar hidden" role="note"></div>
+<div id="opsbar" class="opsbar hidden" role="status"></div>
 <main id="main" class="content" tabindex="-1">
   <div id="notice" class="notice hidden" role="status"></div>
   <section id="app" aria-live="polite"><div class="loading">Loading…</div></section>
@@ -61,6 +58,6 @@
 </footer>
 </div>
 </div>
-<script src="/assets/app.js?v=20261012-ui5"></script>
+<script src="/assets/app.js?v=20261013-auth2"></script>
 </body>
 </html>

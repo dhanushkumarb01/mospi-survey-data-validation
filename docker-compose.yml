@@ -39,11 +39,14 @@ services:
     image: mospi-survey-validation:1.0
     <<: *hardening
     # Published on this computer only.  To serve a network, put an approved
-    # TLS reverse proxy in front and enable token authentication (docs/deployment/DOCKER.md).
+    # TLS reverse proxy in front (docs/deployment/DOCKER.md).  Sign-in is always on:
+    # create the first administrator with
+    #   docker compose run --rm app python -m mospi.auth create-admin --username admin --name "Full Name"
     ports:
       - "127.0.0.1:${MOSPI_PORT:-8000}:8000"
     environment:
-      MOSPI_USERS_FILE: ${MOSPI_USERS_FILE_IN_CONTAINER:-}
+      # Keeps sessions valid across restarts (32+ characters); without it everyone signs in again after a restart.
+      MOSPI_SESSION_SECRET: ${MOSPI_SESSION_SECRET:-}
     volumes:
       - {type: volume, source: mospi-data, target: /data/preprocessing/runs, read_only: true, volume: {subpath: preprocessing/runs}}
       - {type: volume, source: mospi-data, target: /data/statistical/runs, read_only: true, volume: {subpath: statistical/runs}}
@@ -54,6 +57,7 @@ services:
       - {type: volume, source: mospi-data, target: /data/integrity/runs, read_only: true, volume: {subpath: integrity/runs}}
       - {type: volume, source: mospi-data, target: /data/evaluation/results, read_only: true, volume: {subpath: evaluation/results}}
       - {type: volume, source: mospi-data, target: /data/fusion/runs, volume: {subpath: fusion/runs}}
+      - mospi-auth:/data/auth                    # user accounts (SQLite, scrypt hashes only)
     mem_limit: ${MOSPI_MEM_LIMIT:-3g}
     restart: unless-stopped
 
@@ -98,6 +102,7 @@ services:
 
 volumes:
   mospi-data:
+  mospi-auth:
 
 # Build-time only: CA certificate of a TLS-inspecting proxy/antivirus, if the
 # build machine has one.  The default is an empty file (no extra CA).

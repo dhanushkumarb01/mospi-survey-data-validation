@@ -53,7 +53,7 @@ Set these as environment variables or in a `.env` file next to `docker-compose.y
 | `MOSPI_DATA_DIR` | `./data` (this repository's `data/` folder) | Directory with the run layout `<module>/runs/<run>/…` and `evaluation/results/`, used by `seed` and `batch` |
 | `MOSPI_PORT` | `8000` | Host port, always bound to `127.0.0.1` |
 | `MOSPI_MEM_LIMIT` | `3g` | Memory limit of the app container (observed: about 110 MB at idle, more during a full export) |
-| `MOSPI_USERS_FILE_IN_CONTAINER` | empty | Path *inside the container* of a users file; turns on token authentication (below) |
+| `MOSPI_SESSION_SECRET` | empty | Signs session cookies (32+ characters); without it everyone signs in again after a restart |
 | `MOSPI_EXTRA_CA_FILE` | empty file | Build time only: CA certificate of a TLS-inspecting proxy or antivirus on the build machine |
 | `MOSPI_UID` / `MOSPI_GID` | `10001` | User for the `batch` service and the Linux bind-mount override |
 | `MOSPI_BATCH_MEM_LIMIT` | `6g` | Memory limit of the `batch` service |
@@ -172,22 +172,13 @@ Provided:
 * Security headers are set: CSP `default-src 'self'`, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`.
 * There are no external network calls and no API documentation endpoints.
 
-Optional token authentication: mount a users file and point `MOSPI_USERS_FILE_IN_CONTAINER` at it.
+Sign-in is always required. Accounts are kept in the `mospi-auth` volume (`/data/auth/users.sqlite`, scrypt hashes only). Create the first administrator once:
 
-```json
-{"users": [{"name": "A. Supervisor", "role": "supervisor", "token_sha256": "<sha256 hex of the token>"}]}
+```
+docker compose run --rm app python -m mospi.auth create-admin --username admin --name "Full Name"
 ```
 
-Roles are `supervisor` (may record decisions), `technical` (read-only) and `admin`. Add the mount with a `docker-compose.override.yml`:
-
-```yaml
-services:
-  app:
-    volumes:
-      - ./secrets/users.json:/run/secrets/users.json:ro
-```
-
-Then set `MOSPI_USERS_FILE_IN_CONTAINER=/run/secrets/users.json`.
+The administrator then creates supervisor and analyst accounts on the **Users** page ([USER_ACCOUNTS.md](USER_ACCOUNTS.md)).
 
 **Not provided, and required before any networked or production use:**
 * TLS

@@ -11,6 +11,8 @@
   are transaction-scoped (``pg_advisory_xact_lock``) and therefore safe behind a transaction pooler.
 * All variable data goes through parameters (``%s``); SQL text never contains user input.
 * Connection strings are never logged: use :func:`redact` for messages.
+* A refused login is never retried by the same process: repeated failed logins get the client's address banned by the
+  Supabase pooler, so after one the connection reports itself unavailable until the application restarts.
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from typing import Any, Iterator
 from .config import int_setting, load_env_file, schema as configured_schema
 
 LOGGER = logging.getLogger("MoSPI.db")
+_LOGIN_REFUSED = re.compile(r"authentication failed|tenant or user not found|no pg_hba\.conf entry", re.I)
+LOGIN_REFUSED = "The database refused this login, so it is not tried again until the application restarts. Check the configured credentials."
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -59,6 +63,7 @@ class Database:
         self.max_idle_seconds = max_idle_seconds
         self.application_name = application_name
         self.read_only = read_only
+        self.login_refused = False
         self._slots = threading.BoundedSemaphore(self.max_connections)
         self._idle: list[tuple[float, Any]] = []
         self._lock = threading.Lock()
@@ -69,11 +74,16 @@ class Database:
     def _connect(self):
         import psycopg
         from psycopg.rows import dict_row
+        if self.login_refused:
+            raise DatabaseUnavailable(LOGIN_REFUSED)
         try:
             return psycopg.connect(self._url, connect_timeout=self.connect_timeout, prepare_threshold=None, row_factory=dict_row,
                                    application_name=self.application_name,
                                    options=f"-c search_path={self.schema} -c statement_timeout={int(self.statement_timeout_ms)}")
         except psycopg.Error as error:
+            if _LOGIN_REFUSED.search(str(error)):
+                self.login_refused = True
+                LOGGER.error("Login refused for %s (application %s); not retried until restart.", redact(self._url), self.application_name)
             raise DatabaseUnavailable(f"PostgreSQL is not reachable: {redact(error)}".strip()) from None
 
     def _checkout(self):

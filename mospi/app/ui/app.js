@@ -14,9 +14,9 @@
 
 const app = document.querySelector('#app');
 const runSelect = document.querySelector('#runSelect');
-const reviewerInput = document.querySelector('#reviewer');
 const PAGE_SIZE = 50;
-const S = { runs: [], run: null, labels: null, filters: {}, page: 1, user: null, ov: null, deploy: { review_only: false, audit_writable: true } };
+const S = { runs: [], run: null, labels: null, filters: {}, page: 1, user: null, caps: [], auth: false, session: {}, ov: null,
+  deploy: { review_only: false, audit_writable: true, exports: true, notes_shown: true } };
 const nf = new Intl.NumberFormat('en-IN');
 
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c]));
@@ -31,13 +31,17 @@ function money(v) { return v == null ? '—' : `₹${nf.format(Math.round(Number
 
 /* ------------------------------------------------------------ API */
 
-function authToken() { return store.get('s:MoSPI.token', ''); }
+// The session is an HttpOnly cookie this script never sees.  Every request carries the workspace header, which the
+// server requires on anything that changes state (a page on another site cannot add it).
+const REQUEST_HEADER = { 'X-MoSPI-Request': '1' };
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  if (authToken()) headers.Authorization = `Bearer ${authToken()}`;
-  const r = await fetch(path, { ...options, headers });
-  if (r.status === 401) { store.set('s:MoSPI.token', ''); await signIn(); return api(path, options); }
-  if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail || d; } catch { /* not JSON */ } throw Object.assign(new Error(d), { status: r.status }); }
+  const r = await fetch(path, { ...options, headers: { ...REQUEST_HEADER, ...(options.headers || {}) }, credentials: 'same-origin' });
+  if (r.status === 401 && S.auth) { await signIn(); return api(path, options); }
+  if (!r.ok) {
+    let body = {}; try { body = await r.json(); } catch { /* not JSON */ }
+    if (r.status === 403 && body.password_change_required) { await changePassword(true); return api(path, options); }
+    throw Object.assign(new Error(body.detail || r.statusText), { status: r.status });
+  }
   return r.json();
 }
 function url(path, params = {}) {
@@ -48,7 +52,11 @@ function notice(text, kind = '') {
   const el = document.querySelector('#notice');
   el.textContent = text || ''; el.className = `notice ${kind}`; el.classList.toggle('hidden', !text);
 }
-function reviewer() { return reviewerInput.value.trim(); }
+function reviewer() { return S.user?.name || ''; }
+// Capabilities come from /api/session (mospi/auth/roles.py); the server refuses anything a role cannot do either way.
+const can = capability => !S.auth || S.caps.includes(capability);
+function canDecide() { return can('decide'); }
+function runShort(r) { return `PLFS ${String(r.release || '').replace('_', '–')} · ${r.observation === 'first_visit' ? 'first visit' : r.observation}${String(r.fusion_version || '').includes('lanes') ? '' : ' · superseded method'}`; }
 function runLabel(r) { return `PLFS ${String(r.release || '').replace('_', '–')} · ${r.observation === 'first_visit' ? 'first visit' : r.observation} · ${String(r.fusion_version || '').includes('lanes') ? 'current method' : 'superseded method'} (${r.directory})`; }
 function currentRun() { return S.runs.find(r => r.directory === S.run) || {}; }
 const isLanes = () => String(currentRun().fusion_version || '').includes('lanes');
@@ -133,7 +141,7 @@ function supersededBanner() {
 
 /* ------------------------------------------------------------ routing */
 
-const routes = { overview, worklist, cases, case: casePage, groups, group: groupPage, areas, reviewed, technical, batch: id => (id ? batchJob(id) : batch()), upload };
+const routes = { overview, worklist, cases, case: casePage, groups, group: groupPage, areas, reviewed, technical, batch: id => (id ? batchJob(id) : batch()), upload, users };
 async function route() {
   const [path, query] = location.hash.replace(/^#\/?/, '').split('?');
   const [name, ...rest] = path.split('/');
@@ -249,22 +257,27 @@ async function overview() {
       ${statCard({ tone: 'green', ic: 'check', label: 'Decided so far', value: n(r.decided), sub: `${n(r.opened_without_decision || 0)} opened without a decision`, href: '#/reviewed' })}
     </section>
     <div class="ov-grid">
+      <div class="ov-col">
       <div class="panel">${panelHead(`Why cases are in ${listName}`, 'bars', `<span class="small muted">Total cases: <b class="ink">${n(now.records)}</b>${reasonTotal > now.records ? ' · a case can have more than one reason' : ''}</span>`)}
         ${reasonRows ? `<div class="reasons">${reasonRows}</div>` : empty('No case is in this group.')}</div>
-      <div class="panel">${panelHead('Decisions', 'check', '<a class="small link-go" href="#/reviewed">All decisions</a>')}
-        <div class="dtiles">${decisionTiles}</div></div>
       <div class="panel">${panelHead(`Where the ${lanes ? '“Check now”' : 'highest-priority'} cases are`, 'map', `<span class="small muted">Top ${n(states.length)} States/UTs · <a href="#/areas">All areas</a></span>`)}
         ${states.length ? `<div class="hbar-head" aria-hidden="true"><span>State/UT</span><span></span><span>Cases</span><span>Records</span></div>${hbarList(states.map(s => ({ label: s.label, href: `#/worklist?state=${encodeURIComponent(s.state)}`, value: s.highest, sub: n(s.records) })))}` : empty('No case is in this group.')}</div>
+      </div>
+      <div class="ov-col">
+      <div class="panel">${panelHead('Decisions', 'check', '<a class="small link-go" href="#/reviewed">All decisions</a>')}
+        <div class="dtiles">${decisionTiles}</div></div>
       <div class="panel">${panelHead('By interview period', 'trend', '<a class="small link-go" href="#/areas">Area trends</a>')}
         ${hasTrend ? `<p class="panel-note">Cases per 1,000 records that could be checked, by when the interview took place.</p><div class="legend" id="ovTrendLegend"></div><div class="viz-box" id="ovTrend"></div>`
           : empty(lanes ? 'This run has a single interview period, so there is nothing to compare over time.' : 'Available for current-method runs.')}</div>
-      <div class="panel violet">${panelHead('Strongest group alerts', 'group', '<a class="small link-go" href="#/groups">All</a>')}
-        ${table(['FSU', 'What differs'], grp.rows.map(g => `<tr><td><a href="#/group/${encodeURIComponent(g.fsu)}?state=${encodeURIComponent(g.state)}">${esc(g.fsu)}</a><div class="small muted">${esc(g.location_label)}</div></td><td>${esc(g.patterns?.[0]?.text || g.strongest_statement || '')}</td></tr>`), { empty: 'No FSU-level group alert.' })}
-        <p class="small">Group alerts describe an FSU as a whole. They do not mean that any person's answers are wrong and never move a case in the list.</p></div>
       <div class="panel">${panelHead('Most recent decisions', 'clock', '<a class="small link-go" href="#/reviewed">All</a>')}
         ${rev.rows.length ? table(['Case', 'By', 'When'], rev.rows.slice(0, 5).map(x =>
           `<tr><td><a href="#/case/${encodeURIComponent(x.case_id)}">${esc(x.record_label)}</a><div>${decisionChip(x.decision)}</div></td><td>${esc(x.actor)}${x.actor_verified ? '' : ' <span class="small muted">(unverified)</span>'}</td><td class="small">${esc(when(x.decided_at_utc))}</td></tr>`)) : empty('No decision recorded yet.')}</div>
+      </div>
     </div>
+    <div class="panel violet">${panelHead('Strongest group alerts', 'group', '<a class="small link-go" href="#/groups">All</a>')}
+        ${table(['FSU', 'What differs'], grp.rows.map(g => `<tr><td><a href="#/group/${encodeURIComponent(g.fsu)}?state=${encodeURIComponent(g.state)}">${esc(g.fsu)}</a><div class="small muted">${esc(g.location_label)}</div></td><td>${esc(g.patterns?.[0]?.text || g.strongest_statement || '')}</td></tr>`), { empty: 'No FSU-level group alert.' })}
+        <p class="small">Group alerts describe an FSU as a whole. They do not mean that any person's answers are wrong and never move a case in the list.</p></div>
+    <div class="fold-row">
     ${lanes ? `<details class="panel legend-panel"><summary>How to read the lists and the review budget</summary><div class="readguide">
       <div>${chip(S.labels.bands.CHECK_NOW, 'red')}<p>Review first: a questionnaire rule is not met, or the evidence is rare enough to fit this batch's review budget.</p></div>
       <div>${chip(S.labels.bands.CHECK_IF_TIME, 'amber')}<p>Review when possible: soft checks and evidence that is weaker or did not fit the budget.</p></div>
@@ -279,7 +292,7 @@ async function overview() {
             { label: 'Nominal alerts per 1,000 records if all were clean', value: Number(burden.nominal_value_alerts_per_1000_if_all_clean).toFixed(2) },
             { label: 'Observed alerts per 1,000 records', value: Number(burden.observed_value_alerts_per_1000).toFixed(2) },
             { label: 'Highest / median State “Check now” rate', value: burden.check_now_state_rate_max_over_median == null ? '—' : Number(burden.check_now_state_rate_max_over_median).toFixed(2) }])}
-      <p class="small muted">${esc(burden.note || '')} This is a structural check, not a validation against confirmed errors.</p></details>` : ''}`;
+      <p class="small muted">${esc(burden.note || '')} This is a structural check, not a validation against confirmed errors.</p></details>` : ''}</div>`;
 
   if (hasTrend) {
     const draw = () => {
@@ -357,8 +370,8 @@ async function cases(_, params) {
       <label class="grow">Search <input name="q" value="${esc(f.q || '')}" placeholder="FSU, case or record key" type="search"></label>
       <div class="actions"><button>Apply</button></div></form>
     <div class="result-head"><span class="count">${n(data.total)} ${data.total === 1 ? 'case' : 'cases'} <span>· in queue order · page ${S.page} of ${pages}</span></span>
-      ${S.deploy.audit_writable ? `<a class="btn secondary" href="${url('/api/export/queue', { run: S.run, ...f })}" id="export">Export CSV</a>`
-        : '<span class="small muted" title="Exports are logged in the audit trail, which is read-only on this instance.">CSV export is not available on this instance</span>'}</div>
+      ${S.deploy.exports && can('export') ? `<a class="btn secondary" href="${url('/api/export/queue', { run: S.run, ...f })}" id="export">Export CSV</a>`
+        : '<span class="small muted" title="Exports are logged in the audit trail; they are offered only where that is available.">CSV export is not available on this instance</span>'}</div>
     ${table([{ label: '#', num: true }, 'List', 'Reason', 'Finding', 'Area', 'Record', 'Status'], data.rows.map(r => `<tr class="${r.review_status !== 'UNREVIEWED' ? 'done' : ''}">
       <td class="num">${n(r.position)}</td><td>${bandChip(r.priority_band)}</td><td>${laneChips(r)}</td>
       <td><a href="#/case/${encodeURIComponent(r.case_id)}?pos=${r.position}">${esc(r.unusual || '')}</a>${(r.why || []).map(w => `<div class="small muted">${esc(w)}</div>`).join('')}</td>
@@ -369,14 +382,6 @@ async function cases(_, params) {
   document.querySelector('#cf').onsubmit = e => { e.preventDefault(); S.filters = Object.fromEntries(new FormData(e.target)); S.page = 1; reload(); };
   document.querySelector('#prev')?.addEventListener('click', () => { S.page -= 1; reload(); });
   document.querySelector('#next')?.addEventListener('click', () => { S.page += 1; reload(); });
-  const exportLink = document.querySelector('#export');
-  if (exportLink) exportLink.onclick = async e => {
-    if (!authToken()) return;   // without sign-in the plain link works
-    e.preventDefault();
-    const r = await fetch(e.target.href, { headers: { Authorization: `Bearer ${authToken()}` } });
-    if (!r.ok) { notice('Your role cannot export case lists.', 'error'); return; }
-    const blob = await r.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mospi-review-queue.csv'; a.click();
-  };
 }
 
 /* ------------------------------------------------------------ case page */
@@ -410,9 +415,9 @@ function decisionForm(d) {
     <label>How it was verified <select name="verification_source" required><option value="">Choose…</option>${options(S.labels.verification_sources)}</select></label>
     <div id="corr" class="hidden"><label>Item corrected <input name="corrected_field" maxlength="200" placeholder="e.g. salaried earnings"></label>
       <label>Correct value (if known) <input name="corrected_value" maxlength="200"></label></div>
-    <label>Note <textarea name="comment" rows="2" maxlength="2000" placeholder="Optional: what was checked and with whom"></textarea></label>
+    <label>Note <textarea name="comment" rows="2" maxlength="2000" placeholder="Optional: what was checked and with whom"></textarea>${S.deploy.notes_shown === false ? '<span class="small muted">Your note is saved with the decision but is not shown on this site.</span>' : ''}</label>
     <button class="lg block cta">Save decision</button>
-    <p class="small muted" id="who">${S.user ? `Saving as ${esc(S.user.name)} (signed in).` : reviewer() ? `Saving as ${esc(reviewer())} — not signed in, so the name is recorded as unverified.` : 'Add your name at the top so the audit trail shows who decided.'}</p>
+    ${S.user ? `<p class="small muted" id="who">Saving as ${esc(S.user.name)}.</p>` : ''}
   </form>`;
 }
 
@@ -420,7 +425,7 @@ async function casePage(caseId, params) {
   crumbs(['Case']);
   const opened = new Date().toISOString();
   const d = await api(url(`/api/cases/${encodeURIComponent(caseId)}`, { run: S.run }));
-  if (S.deploy.audit_writable) {
+  if (S.deploy.audit_writable && canDecide()) {
     api(url(`/api/cases/${encodeURIComponent(caseId)}/events`, { run: S.run }), { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event_type: 'CASE_VIEWED', actor: reviewer() || 'local-supervisor' }) }).catch(() => {});
   }
@@ -439,7 +444,7 @@ async function casePage(caseId, params) {
       <div class="page-actions">${pos > 1 ? `<button class="secondary" id="prevCase">${icon('back')}Previous case</button>` : ''} ${lanes ? '<button class="secondary jump" id="toDecision">Go to decision</button>' : ''} <button class="secondary" id="nextCase">Next case</button></div></div>
     <div class="panel headline"><span class="stat-badge">${icon('alert')}</span><div><p class="eyebrow" style="margin-bottom:2px">Why this case is listed</p><b>${esc(s.headline || '')}</b>${s.queue?.reason ? `<p class="muted" style="margin:4px 0 0">${esc(s.queue.reason)}</p>` : ''}</div></div>
     <div class="case-cols"><div>
-      <div class="panel"><h2>What was recorded</h2>${kv([...(record.location || []), ...(record.survey || [])])}${record.person?.length ? `<h3>${record.level === 'household' ? 'Household' : 'Person'}</h3>${kv(record.person)}` : ''}</div>
+      <div class="panel kv-pairs"><h2>What was recorded</h2>${kv([...(record.location || []), ...(record.survey || [])])}${record.person?.length ? `<h3>${record.level === 'household' ? 'Household' : 'Person'}</h3>${kv(record.person)}` : ''}</div>
       ${evidence}
       ${groupHtml(s.group || (s.evidence || []).find(e => e.source === 'pattern'), d.fsu, d.state)}
       ${s.unavailable?.length ? `<div class="panel"><h2>What could not be checked</h2><ul class="checks">${s.unavailable.map(u => `<li><b>${esc(u.title)}:</b> ${esc(u.text)}</li>`).join('')}</ul></div>` : ''}
@@ -447,7 +452,9 @@ async function casePage(caseId, params) {
     </div><div class="case-side">
       <div class="panel">${panelHead('What to check', 'list')}${s.checks?.length ? `<ul class="checks">${s.checks.map(c => `<li>${esc(c.text)}${c.detail ? `<div class="small muted">${esc(c.detail)}</div>` : ''}</li>`).join('')}</ul>` : empty('No specific check.')}</div>
       <div class="panel decision-panel">${panelHead('Your decision', 'check')}${!lanes ? '<p class="muted">Decisions are recorded on current-method runs.</p>'
-        : S.deploy.audit_writable ? decisionForm(d) : `<div class="readonly-note">${infoBox(`<b>Decisions cannot be recorded here.</b> ${esc(S.deploy.audit_reason || '')}`, 'accent')}<span class="small muted">Current status: ${decisionChip(d.review_status)}</span></div>`}</div>
+        : S.deploy.audit_writable && canDecide() ? decisionForm(d)
+        : `<div class="readonly-note">${infoBox(S.deploy.audit_writable ? '<b>Your role can view cases but not record decisions.</b> A supervisor or administrator records them.'
+          : `<b>Decisions cannot be recorded here.</b> ${esc(S.deploy.audit_reason || '')}`, 'accent')}<span class="small muted">Current status: ${decisionChip(d.review_status)}</span></div>`}</div>
       <div class="panel"><h2>Importance</h2><p>${esc(s.importance?.plain || s.importance?.summary || '')}</p><p class="small muted">${esc(s.importance?.explanation || '')}</p></div>
       <div class="panel"><h2>Audit history</h2>${table(['When', 'What', 'By'], (d.audit_history || []).slice(-10).map(e =>
         `<tr><td class="small">${esc(when(e.event_timestamp_utc))}</td><td>${esc(e.event_type === 'DECISION_MADE' ? `${S.labels.decisions[e.decision] || e.decision}${e.reason_code ? ` — ${S.labels.reason_codes?.[e.decision]?.[e.reason_code] || e.reason_code}` : ''}` : e.event_type === 'CASE_VIEWED' ? 'Opened' : e.event_type)}${e.comment ? `<div class="small muted">${esc(e.comment)}</div>` : ''}</td>
@@ -476,7 +483,9 @@ async function casePage(caseId, params) {
       ...Object.fromEntries(new FormData(form)) };
     try {
       await api(url(`/api/cases/${encodeURIComponent(caseId)}/events`, { run: S.run }), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      S.ov = null; S.flash = { text: 'Decision saved to the audit trail.', kind: 'ok' };
+      S.ov = null;
+      S.flash = { text: body.comment && S.deploy.notes_shown === false ? 'Decision saved to the audit trail. Your note is stored with it but is not shown on this site.'
+        : 'Decision saved to the audit trail.', kind: 'ok' };
       await openPos(pos ? nextPos : 1);
     } catch (err) {
       if (err.status === 409) { S.flash = { text: err.message, kind: 'error' }; route(); return; }   // reload to show the other decision
@@ -723,10 +732,11 @@ const sparkline = (values, { w = 160, h = 34, color = VIZ.series[0], lowLast = f
 };
 
 /* Spread of area values in one period: one strip per sector, median marked, focus area highlighted. */
-function spreadChart({ width: W, groups, indicator, label }) {
+function spreadChart({ width: W, height = 0, groups, indicator, label }) {
   const all = groups.flatMap(g => g.values.map(v => v.v)).filter(v => v != null);
   if (!all.length) return empty('No value this period.');
-  const m = { l: 70, r: 16, t: 8, b: 26 }, gh = 54;
+  // Strips grow to fill the card beside the trend chart; dots and median bar scale with them.
+  const m = { l: 70, r: 16, t: 8, b: 26 }, gh = Math.max(54, (height - m.t - m.b) / groups.length), k = Math.min(gh / 54, 2.6);
   const H = m.t + groups.length * gh + m.b;
   const dom = niceDomain(Math.max(0, Math.min(...all)), Math.max(...all), Math.max(2, Math.min(5, Math.floor((W - m.l - m.r) / 80))));
   const fmt = tickFormat(indicator, dom.step);
@@ -737,9 +747,9 @@ function spreadChart({ width: W, groups, indicator, label }) {
     const vals = g.values.filter(v => v.v != null).sort((a, b) => a.v - b.v);
     const med = median(vals.map(v => v.v));
     body += `<text class="lbl-ink" x="${m.l - 10}" y="${cy}" text-anchor="end" dominant-baseline="middle">${esc(g.name)}</text>`;
-    body += vals.map((v, i) => `<circle class="spread-dot ${v.focus ? 'focus' : ''}" cx="${x(v.v).toFixed(1)}" cy="${(cy + ((i * 7) % 5 - 2) * 3.4).toFixed(1)}" r="${v.focus ? 5.5 : 3.6}"${tipAttr(tipHtml(g.name, [{ value: indicatorValue(indicator, v.v), label: v.name }]))}/>`).join('');
-    if (med != null) body += `<line class="ref" x1="${x(med).toFixed(1)}" x2="${x(med).toFixed(1)}" y1="${cy - 17}" y2="${cy + 17}" style="stroke-dasharray:none;stroke-width:2"/>
-      <text class="lbl-strong" x="${x(med).toFixed(1)}" y="${cy - 20}" text-anchor="middle">median ${esc(indicatorValue(indicator, med))}</text>`;
+    body += vals.map((v, i) => `<circle class="spread-dot ${v.focus ? 'focus' : ''}" cx="${x(v.v).toFixed(1)}" cy="${(cy + ((i * 7) % 5 - 2) * 3.4 * k).toFixed(1)}" r="${v.focus ? 5.5 : 3.6}"${tipAttr(tipHtml(g.name, [{ value: indicatorValue(indicator, v.v), label: v.name }]))}/>`).join('');
+    if (med != null) body += `<line class="ref" x1="${x(med).toFixed(1)}" x2="${x(med).toFixed(1)}" y1="${(cy - 17 * k).toFixed(1)}" y2="${(cy + 17 * k).toFixed(1)}" style="stroke-dasharray:none;stroke-width:2"/>
+      <text class="lbl-strong" x="${x(med).toFixed(1)}" y="${(cy - 17 * k - 3).toFixed(1)}" text-anchor="middle">median ${esc(indicatorValue(indicator, med))}</text>`;
   });
   return svgEl(W, H, label, body);
 }
@@ -864,7 +874,7 @@ async function areaCases(params) {
         <p class="panel-note" id="acRankNote"></p>
         <div class="viz-box tall" id="acRank"></div>
         <div class="rank-foot"><span class="small muted" id="acRankCount"></span><span id="acTop">${seg('top', String(V.top), [['15', 'Top 15'], ['30', 'Top 30'], ['0', 'All']])}</span></div></div>
-      <div>
+      <div class="at-col">
         <div class="panel">${panelHead('Why cases are listed', 'bars', '<span class="small muted" id="acReasonSub"></span>')}<div id="acReasons"></div></div>
         <div class="panel">${panelHead('Rural and urban', 'group', '<span class="small muted">per 1,000 checkable records</span>')}<div id="acSectors"></div></div>
       </div>
@@ -1209,7 +1219,7 @@ async function areaIndicators(_, params) {
         <p class="small muted" style="margin:10px 0 0">The shaded band is ±1.96 × the design-based standard error (falls back to the simple-random-sampling error when no design-based one exists). Use the arrow keys on the chart to read each period.</p>
       </div>
       <div class="panel">${panelHead(level === 'national' ? `Rural and urban — ${last}` : `Spread of areas — ${last}`, 'group', '<span class="small muted">all sectors</span>')}
-        <div class="viz-box" id="atSpread"></div>
+        <div class="viz-box fill" id="atSpread"></div>
         <p class="small muted" style="margin:8px 0 0">${level === 'national' ? 'Bars show the value; whiskers show ±1.96 × standard error.' : 'Each dot is one area; the bar marks the median. The highlighted dot is the area in focus.'}</p>
       </div>
     </div>
@@ -1298,20 +1308,22 @@ async function areaIndicators(_, params) {
       const options = placeList.filter(p => p.key !== V.focus && !V.compare.includes(p.key));
       cmp.innerHTML = `<span class="small muted">Compare:</span>${V.compare.map((k, i) => `<span class="cmp-chip"><i style="background:${VIZ.series[i + 1]}"></i>${esc(nameOf(k))}<button type="button" data-uncompare="${esc(k)}" aria-label="Remove ${esc(nameOf(k))} from the comparison">×</button></span>`).join('')}
         ${V.compare.length < 3 ? `<select class="field" id="atAdd" aria-label="Add an area to compare" style="height:30px;max-width:240px"><option value="">Add an area…</option>${options.map(p => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('')}</select>` : '<span class="small muted">up to 4 areas</span>'}`;
-      $('#atAdd')?.addEventListener('change', e => { if (e.target.value) { V.compare.push(e.target.value); drawTrend(); $('#atAdd')?.focus(); } });
+      $('#atAdd')?.addEventListener('change', e => { if (e.target.value) { V.compare.push(e.target.value); drawTrend(); drawSpread(); $('#atAdd')?.focus(); } });
     }
   }
 
   /* ---- spread (State/District) or rural/urban bars (national) */
   function drawSpread() {
     const box = $('#atSpread');
+    box.innerHTML = '';  // measure the space the stretched card leaves once the old chart is gone
+    const fill = box.clientHeight;
     if (level === 'national') {
       const items = sectors.map((s, i) => { const r = latestOf('|', s); return { name: sectorName(s), v: r?.value, se: seOf(r), low: precisionIssues(r).length > 0, color: VIZ.series[i], tip: rowTip(`All India · ${sectorName(s)}`, r) }; });
       box.innerHTML = rankChart({ width: vizWidth(box), items, indicator, label: `${indLabel}, rural and urban, ${last}: ${items.map(i => `${i.name} ${indicatorValue(indicator, i.v)}`).join(', ')}`, rowH: 34 });
     } else {
       const groups = sectors.map(s => ({ name: sectorName(s), values: [...places.values()].filter(p => p.key !== '|').map(p => ({ name: p.name, v: get(p.key, s, lastIdx)?.value, focus: p.key === V.focus })) }));
       const summary = groups.map(g => `${g.name}: median ${indicatorValue(indicator, median(g.values.map(v => v.v)))} across ${g.values.filter(v => v.v != null).length} areas`).join('; ');
-      box.innerHTML = spreadChart({ width: vizWidth(box), groups, indicator, label: `${indLabel} by area, ${last}. ${summary}.` });
+      box.innerHTML = spreadChart({ width: vizWidth(box), height: fill, groups, indicator, label: `${indLabel} by area, ${last}. ${summary}.` });
     }
     roving(box);
   }
@@ -1421,7 +1433,7 @@ async function areaIndicators(_, params) {
     else if (t.dataset.order) { V.order = t.dataset.order; root.querySelectorAll('[data-order]').forEach(b => b.setAttribute('aria-pressed', String(b === t))); drawRank(); }
     else if (t.dataset.bind) { V.board.ind = t.dataset.bind; drawBoard(); }
     else if (t.dataset.blevel) { V.board.level = t.dataset.blevel; drawBoard(); }
-    else if (t.dataset.uncompare) { V.compare = V.compare.filter(k => k !== t.dataset.uncompare); drawTrend(); }
+    else if (t.dataset.uncompare) { V.compare = V.compare.filter(k => k !== t.dataset.uncompare); drawTrend(); drawSpread(); }
     else if (t.dataset.focus != null) setFocus(t.dataset.focus);
   });
   root.addEventListener('keydown', e => { const t = e.target.closest?.('g[data-focus]'); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setFocus(t.dataset.focus); } });
@@ -1484,7 +1496,7 @@ async function technical() {
   const m = summary.metadata, rep = summary.report;
   app.innerHTML = `${pageHead({ eyebrow: 'For technical staff', title: 'Technical reference',
       lede: 'Run provenance, audit-trail integrity, questionnaire rules, evaluation results and the single-record check.' })}
-    <div class="panel"><h2>Run and method</h2>${kv([{ label: 'Fusion run', value: summary.run }, { label: 'Method', value: m.fusion_version },
+    <div class="panel kv-pairs"><h2>Run and method</h2>${kv([{ label: 'Fusion run', value: summary.run }, { label: 'Method', value: m.fusion_version },
       { label: 'Preparation run', value: m.input_preprocessing_run_id }, ...Object.entries(m.source_runs || {}).map(([k, v]) => ({ label: `${k} run`, value: v }))])}
       ${tech(m.parameters, 'Parameters')}${tech(rep, 'Run report')}</div>
     <div class="grid2">
@@ -1524,8 +1536,8 @@ function stopBatchTimer() { if (batchTimer) { clearTimeout(batchTimer); batchTim
 
 async function openRun(directory, page = 'overview') {
   S.runs = await api('/api/runs');
-  runSelect.innerHTML = S.runs.map(r => `<option value="${esc(r.directory)}" ${r.directory === directory ? 'selected' : ''}>${esc(runLabel(r))}</option>`).join('');
   S.run = directory; S.filters = {}; S.page = 1; S.ov = null; store.set('l:MoSPI.run', S.run);
+  renderRuns();
   go(`#/${page}`);
 }
 
@@ -1648,7 +1660,7 @@ const opsChip = s => chip(OPS_LABEL[s] || s, OPS_CHIP[s] || '');
 const JOB_STAGES = ['staging', 'preparation', 'peer', 'statistical', 'contextual', 'ml', 'pattern', 'historical', 'integrity', 'fusion', 'publication'];
 const JOB_STAGE_LABEL = { staging: 'Check stored files', preparation: 'Prepare delivery', ...STAGE_LABEL, publication: 'Publish run' };
 const SEVERITY = { BLOCKING: 'blocking', WARNING: 'warning', INFO: '' };
-const isAdmin = () => S.user?.role === 'admin';
+const isAdmin = () => can('run');
 const bytes = v => (v == null ? '—' : v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(v / 1024))} KB`);
 const newKey = () => (window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`).replace(/[^a-z0-9]/gi, '');
 const up = { files: [], skipped: [] };
@@ -1684,8 +1696,8 @@ async function upload(sub) {
     app.innerHTML = `${head}${infoBox(esc(ops.available ? 'Uploads and validation runs happen on the processing machine. This instance shows their status only.' : ops.reason), 'accent')}${opsPanels(ops, [], [])}`;
     return;
   }
-  if (!S.user || !['admin', 'technical'].includes(S.user.role)) {
-    app.innerHTML = `${head}${infoBox('Sign in as an administrator to upload and validate survey data. Technical staff can follow jobs and checks.', 'amber')}${opsPanels(ops, [], [])}`;
+  if (!S.user || !can('operations')) {
+    app.innerHTML = `${head}${infoBox('An administrator uploads and validates survey data; analysts follow the jobs and checks here.', 'amber')}${opsPanels(ops, [], [])}`;
     return;
   }
   const [info, ds, jobs, alerts] = await Promise.all([api('/api/ingest/contracts'), api('/api/datasets'), api('/api/jobs'), api('/api/notifications')]);
@@ -1799,7 +1811,7 @@ function putFile(datasetId, item, k) {
     const xhr = new XMLHttpRequest();
     const bar = document.querySelector(`#ub${k}`);
     xhr.open('PUT', url(`/api/datasets/${datasetId}/files`, { name: item.file.name, path: item.path }));
-    if (authToken()) xhr.setRequestHeader('Authorization', `Bearer ${authToken()}`);
+    xhr.setRequestHeader('X-MoSPI-Request', '1');
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.upload.onprogress = e => { if (e.lengthComputable && bar) bar.firstElementChild.style.width = `${(e.loaded / e.total) * 100}%`; };
     xhr.onload = () => {
@@ -1922,13 +1934,110 @@ async function uploadJob(id) {
   else opsbar(true);
 }
 
-/* ------------------------------------------------------------ sign-in and start */
+/* ------------------------------------------------------------ users (administrators) */
+
+const AUTH_EVENT = { SIGNED_IN: 'Signed in', SIGN_IN_FAILED: 'Failed sign-in', ACCOUNT_LOCKED: 'Locked after failed sign-ins', SIGNED_OUT: 'Signed out',
+  PASSWORD_CHANGED: 'Changed own password', PASSWORD_RESET: 'Password reset', USER_CREATED: 'Account created', USER_UPDATED: 'Account changed' };
+const ROLE_HELP = { supervisor: 'Reviews cases and records decisions; can export case lists.',
+  analyst: 'Reads review lists, analytics, jobs and checks; records no decisions.' };
+
+function accountStatus(u) {
+  if (!u.active) return chip('Deactivated');
+  if (u.locked_until && new Date(u.locked_until) > new Date()) return chip('Locked', 'amber');
+  if (u.must_change_password) return chip('Password not set yet', 'amber');
+  return chip('Active', 'green');
+}
+
+function credentialsPanel(c) {
+  return `<div class="panel credentials" role="status">${panelHead(c.title, 'lock')}
+    <dl class="kv"><dt>Name</dt><dd>${esc(c.name)}</dd><dt>Username</dt><dd class="mono">${esc(c.username)}</dd><dt>Temporary password</dt><dd class="mono">${esc(c.password)}</dd></dl>
+    <p class="small muted">Shown only now. Pass it on through a separate channel, such as a phone call or in person. They choose their own password at their first sign-in.</p>
+    <p class="page-actions"><button type="button" class="secondary" id="copyCreds">Copy username and password</button></p></div>`;
+}
+
+async function users() {
+  crumbs(['Users']);
+  const head = pageHead({ eyebrow: 'Administration', title: 'Users', lede: 'Create supervisor and analyst accounts, reset passwords and deactivate accounts. Administrator accounts are created on the server.' });
+  if (!S.auth || !can('manage_users') || !S.session.accounts_managed_here) {
+    app.innerHTML = `${head}${infoBox(S.auth && can('manage_users') ? 'Accounts are managed on the processing machine.' : 'Only an administrator can manage accounts.', 'amber')}`;
+    return;
+  }
+  const data = await api('/api/users');
+  const creds = S.creds; S.creds = null;
+  const roleOptions = selected => data.roles.map(r => `<option value="${r}" ${r === selected ? 'selected' : ''}>${esc(data.role_labels[r])}</option>`).join('');
+  app.innerHTML = `${head}
+    ${creds ? credentialsPanel(creds) : ''}
+    <div class="panel">${panelHead('Add an account', 'people')}
+      <form id="uf" class="filters user-form" autocomplete="off">
+        <label class="grow">Name <input name="display_name" required maxlength="80" placeholder="As it should appear in the audit trail"></label>
+        <label>Username <input name="username" required maxlength="40" pattern="[a-z0-9][a-z0-9._\\-]{2,39}" autocapitalize="none" spellcheck="false" placeholder="e.g. r.sharma"
+          title="3 to 40 characters: lower-case letters, digits, dots, hyphens or underscores"></label>
+        <label>Role <select name="role" id="ufRole">${roleOptions('supervisor')}</select></label>
+        <div class="actions"><button id="ufGo">Create account</button></div>
+      </form>
+      <p class="small muted" id="ufHelp">${esc(ROLE_HELP.supervisor)}</p></div>
+    <div class="panel">${panelHead('Accounts', 'list', `<span class="small muted">${n(data.users.filter(u => u.active).length)} active</span>`)}
+      ${table(['Name', 'Role', 'Status', 'Last sign-in', 'Created', ''], data.users.map(u => {
+        const self = u.user_id === S.user.user_id, admin = u.role === 'admin';
+        const actions = admin ? `<span class="small muted">${self ? 'You' : 'Managed on the server'}</span>`
+          : `<div class="row-actions">${u.active ? `<button type="button" class="secondary sm" data-reset="${u.user_id}">Reset password</button>` : ''}
+              <button type="button" class="secondary sm" data-active="${u.user_id}" data-to="${u.active ? '0' : '1'}">${u.active ? 'Deactivate' : 'Reactivate'}</button></div>`;
+        const role = admin || !u.active ? esc(data.role_labels[u.role]) : `<select class="role-pick" data-role="${u.user_id}" aria-label="Role of ${esc(u.display_name)}">${roleOptions(u.role)}</select>`;
+        return `<tr><td><b>${esc(u.display_name)}</b><div class="small muted mono">${esc(u.username)}</div></td><td>${role}</td><td>${accountStatus(u)}</td>
+          <td class="small">${u.last_login_utc ? esc(when(u.last_login_utc)) : '—'}</td><td class="small">${esc(when(u.created_utc))}<div class="muted">${esc(u.created_by)}</div></td><td>${actions}</td></tr>`;
+      }), { empty: 'No accounts yet.' })}</div>
+    <div class="panel">${panelHead('Recent sign-in and account activity', 'clock')}
+      ${table(['When', 'What', 'Account', 'By'], data.activity.map(e => `<tr><td class="small">${esc(when(e.event_utc))}</td><td>${esc(AUTH_EVENT[e.event_type] || e.event_type)}${e.detail ? ` <span class="small muted">(${esc(e.detail)})</span>` : ''}</td>
+        <td class="mono small">${esc(e.username)}</td><td class="small">${esc(e.actor === 'anonymous' || e.actor === e.username ? '—' : e.actor)}${e.origin === 'hosted' ? ' <span class="muted">(hosted)</span>' : e.origin === 'cli' ? ' <span class="muted">(server)</span>' : ''}</td></tr>`),
+        { empty: 'Nothing recorded yet.' })}</div>`;
+
+  const send = (path, method, body) => api(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const form = document.querySelector('#uf');
+  document.querySelector('#ufRole').onchange = e => { document.querySelector('#ufHelp').textContent = ROLE_HELP[e.target.value] || ''; };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const button = document.querySelector('#ufGo'); button.disabled = true;
+    try {
+      const r = await send('/api/users', 'POST', { display_name: form.display_name.value.trim(), username: form.username.value.trim().toLowerCase(), role: form.role.value });
+      S.creds = { title: 'Account created', name: r.user.display_name, username: r.user.username, password: r.temporary_password };
+      notice('');
+      await users();
+    } catch (err) { notice(err.message, 'error'); button.disabled = false; }
+  };
+  document.querySelector('#copyCreds')?.addEventListener('click', async e => {
+    try { await navigator.clipboard.writeText(`Username: ${creds.username}\nTemporary password: ${creds.password}`); e.target.textContent = 'Copied'; }
+    catch { e.target.textContent = 'Copy failed: select the text instead'; }
+  });
+  const byId = id => data.users.find(u => String(u.user_id) === String(id));
+  app.querySelectorAll('[data-reset]').forEach(b => { b.onclick = async () => {
+    const u = byId(b.dataset.reset);
+    if (!confirm(`Set a new temporary password for ${u.display_name}? Their current password stops working and they are signed out.`)) return;
+    b.disabled = true;
+    try { const r = await send(`/api/users/${u.user_id}/password`, 'POST'); S.creds = { title: 'Password reset', name: u.display_name, username: u.username, password: r.temporary_password }; await users(); }
+    catch (err) { notice(err.message, 'error'); b.disabled = false; }
+  }; });
+  app.querySelectorAll('[data-active]').forEach(b => { b.onclick = async () => {
+    const u = byId(b.dataset.active), activate = b.dataset.to === '1';
+    if (!activate && !confirm(`Deactivate ${u.display_name}? They are signed out and cannot sign in until the account is reactivated. Their recorded decisions are kept.`)) return;
+    b.disabled = true;
+    try { await send(`/api/users/${u.user_id}`, 'PATCH', { active: activate }); notice(`${u.display_name}: ${activate ? 'reactivated' : 'deactivated'}.`, 'ok'); await users(); }
+    catch (err) { notice(err.message, 'error'); b.disabled = false; }
+  }; });
+  app.querySelectorAll('[data-role]').forEach(s => { s.onchange = async () => {
+    const u = byId(s.dataset.role);
+    if (!confirm(`Make ${u.display_name} ${data.role_labels[s.value].toLowerCase()}? They are signed out and sign in again with the new role.`)) { s.value = u.role; return; }
+    try { await send(`/api/users/${u.user_id}`, 'PATCH', { role: s.value }); notice(`${u.display_name} is now ${data.role_labels[s.value].toLowerCase()}.`, 'ok'); await users(); }
+    catch (err) { notice(err.message, 'error'); s.value = u.role; }
+  }; });
+}
+
+/* ------------------------------------------------------------ sign-in, account and start */
 
 function modebar() {
   const d = S.deploy || {};
   const parts = [];
   if (d.data_notice) parts.push(`<span><i class="tag synthetic">Synthetic data</i>${esc(d.data_notice)}</span>`);
-  // Review-only and read-only decisions are a property of the instance: one compact pill beside the reviewer.
+  // Review-only and read-only decisions are a property of the instance: one compact note in the sidebar.
   const pill = document.querySelector('#modePill');
   const modes = [d.review_only ? 'Validation runs are performed separately and cannot be started from this instance.' : '', d.audit_writable === false ? 'Decisions are read-only here.' : ''].filter(Boolean);
   if (pill && modes.length) {
@@ -1940,52 +2049,164 @@ function modebar() {
   el.innerHTML = parts.length ? `<div class="modebar-row">${parts.join('')}</div>` : '';
   el.classList.toggle('hidden', !parts.length);
   if (d.review_only) { const link = document.querySelector('#nav a[data-route="batch"]'); if (link) (link.querySelector('.nav-label') || link).textContent = 'Batch validation (separate)'; }
-  if (d.audit_writable === false && !S.user) {   // nothing is recorded here, so a typed reviewer name has no use
-    reviewerInput.closest('.tool').classList.add('hidden');
-    document.querySelector('#verified').textContent = 'read-only access';
-  }
+}
+
+function renderRuns() {
+  const counts = {};
+  S.runs.forEach(r => { counts[runShort(r)] = (counts[runShort(r)] || 0) + 1; });
+  runSelect.innerHTML = S.runs.map(r => `<option value="${esc(r.directory)}" ${r.directory === S.run ? 'selected' : ''}>${esc(runShort(r) + (counts[runShort(r)] > 1 ? ` (${r.directory})` : ''))}</option>`).join('');
+  runSelect.title = runLabel(currentRun());
+  document.querySelector('#runPick').classList.toggle('hidden', S.runs.length < 2);
+}
+
+function applySession(session) {
+  S.session = session || {};
+  S.user = S.session.user || null;
+  S.caps = S.session.capabilities || [];
+  document.querySelectorAll('#nav [data-needs]').forEach(el => {
+    const needs = el.dataset.needs;
+    el.classList.toggle('hidden', !can(needs) || (needs === 'manage_users' && !S.session.accounts_managed_here));
+  });
+  const box = document.querySelector('#account');
+  if (!S.user) { box.classList.add('hidden'); return; }
+  document.querySelector('#accountName').textContent = S.user.name;
+  document.querySelector('#accountRole').textContent = S.session.role_label || S.user.role;
+  document.querySelector('#accountInitials').textContent = S.user.name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  document.querySelector('#pwButton').classList.toggle('hidden', !S.session.can_change_password);
+  box.classList.remove('hidden');
+}
+
+// However many requests are waiting for a sign-in or a new password, one dialog is shown.
+const pendingDialogs = {};
+function once(key, open) { return pendingDialogs[key] ||= open().finally(() => { delete pendingDialogs[key]; }); }
+
+// Sign-in backdrop: a soft dot grid, two drifting colour fields and a bar-and-trend skyline that rises on open.
+// Decorative only (aria-hidden, no pointer events); every animation stops under prefers-reduced-motion.
+const SIGNIN_BACKDROP = (() => {
+  const W = 1440, H = 900, n = 36, step = W / n, base = H;
+  const heights = Array.from({ length: n }, (_, i) => 70 + 60 * Math.sin(i * .55) + 45 * Math.sin(i * 1.7 + 1) + i * 4.5);
+  const bars = heights.map((h, i) => `<rect class="sb-bar" x="${(i * step + step * .18).toFixed(1)}" y="${(base - h).toFixed(1)}" width="${(step * .64).toFixed(1)}" height="${h.toFixed(1)}" rx="5" style="--d:${(i * 0.035).toFixed(3)}s"/>`).join('');
+  const pts = heights.map((h, i) => [i * step + step / 2, base - h - 70 - 40 * Math.sin(i * .3)]);
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+  const area = `${line} L${pts[n - 1][0].toFixed(1)} ${H} L${pts[0][0].toFixed(1)} ${H} Z`;
+  const dots = [6, 14, 23, 31].map((i, k) => `<circle class="sb-dot" cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="5" style="--d:${(1.6 + k * .25).toFixed(2)}s"/>`).join('');
+  return `<div class="signin-bg" aria-hidden="true"><span class="sb-orb sb-orb-a"></span><span class="sb-orb sb-orb-b"></span>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMax slice" focusable="false">
+      <defs><pattern id="sb-grid" width="28" height="28" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.3"/></pattern>
+        <linearGradient id="sb-bar-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3355e0" stop-opacity=".2"/><stop offset="1" stop-color="#3355e0" stop-opacity=".03"/></linearGradient>
+        <linearGradient id="sb-area-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a3fcf" stop-opacity=".12"/><stop offset="1" stop-color="#5a3fcf" stop-opacity="0"/></linearGradient></defs>
+      <rect class="sb-grid" width="${W}" height="${H}" fill="url(#sb-grid)"/>
+      <g fill="url(#sb-bar-fill)">${bars}</g>
+      <path class="sb-area" d="${area}" fill="url(#sb-area-fill)"/>
+      <path class="sb-line" d="${line}" pathLength="1"/>${dots}
+    </svg></div>`;
+})();
+
+function authDialog(html) {
+  const overlay = document.createElement('div');
+  overlay.className = 'signin';
+  overlay.innerHTML = SIGNIN_BACKDROP + html;
+  document.body.appendChild(overlay);
+  return overlay;
+}
+const AUTH_BRAND = `<div class="auth-brand"><span class="brand-mark" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 32 32"><path d="M6 26V8h4v18zm8 0V14h4v12zm8 0v-8h4v8z" fill="#ffffff"/></svg></span>
+  <span><b>MoSPI</b><span>Survey Data Validation · PLFS</span></span></div>`;
+
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { ...REQUEST_HEADER, 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
 }
 
 function signIn() {
-  return new Promise(resolve => {
-    const overlay = document.createElement('div');
-    overlay.className = 'signin';
-    overlay.innerHTML = `<form><h2>Sign in</h2><p class="small muted">This workspace requires an access token issued by your administrator. It is kept only for this browser session.</p>
-      <label>Access token <input type="password" name="token" autocomplete="current-password" required></label><button type="submit">Sign in</button></form>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector('input').focus();
-    overlay.querySelector('form').onsubmit = e => { e.preventDefault(); store.set('s:MoSPI.token', overlay.querySelector('input').value.trim()); overlay.remove(); resolve(); };
-  });
+  return once('signin', () => new Promise(resolve => {
+    const overlay = authDialog(`<form class="auth-card" novalidate>${AUTH_BRAND}
+      <h1>Sign in</h1>
+      <label>Username <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="40"></label>
+      <label>Password <input type="password" name="password" autocomplete="current-password" required maxlength="128"></label>
+      <p class="auth-error hidden" role="alert"></p>
+      <button type="submit" class="lg block">Sign in</button>
+      <p class="small muted">Accounts are created by your administrator.</p></form>`);
+    const form = overlay.querySelector('form'), error = overlay.querySelector('.auth-error');
+    form.username.focus();
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (!form.username.value.trim() || !form.password.value) { error.textContent = 'Enter your username and password.'; error.classList.remove('hidden'); return; }
+      const button = form.querySelector('button[type=submit]');
+      button.disabled = true; error.classList.add('hidden');
+      try {
+        applySession(await post('/api/auth/login', { username: form.username.value.trim(), password: form.password.value }));
+        overlay.remove();
+        resolve();
+      } catch (err) {
+        error.textContent = err.message; error.classList.remove('hidden');
+        form.password.value = ''; form.password.focus();
+      } finally { button.disabled = false; }
+    };
+  })).then(() => (S.user?.must_change_password ? changePassword(true) : undefined));
+}
+
+function changePassword(forced = false) {
+  return once('password', () => new Promise(resolve => {
+    const overlay = authDialog(`<form class="auth-card" novalidate>${forced ? AUTH_BRAND : ''}
+      <h1>${forced ? 'Choose your password' : 'Change password'}</h1>
+      ${forced ? '<p class="muted">You signed in with a temporary password. Choose your own to continue.</p>' : ''}
+      <label>Current password <input type="password" name="current" autocomplete="current-password" required maxlength="128"></label>
+      <label>New password <input type="password" name="next" autocomplete="new-password" required maxlength="128" aria-describedby="pwRule"></label>
+      <label>New password again <input type="password" name="again" autocomplete="new-password" required maxlength="128"></label>
+      <p class="small muted" id="pwRule">At least 12 characters, without your name or username. A short phrase is easier to remember.</p>
+      <p class="auth-error hidden" role="alert"></p>
+      <div class="auth-actions"><button type="button" class="secondary" data-leave>${forced ? 'Sign out' : 'Cancel'}</button><button type="submit">Save password</button></div></form>`);
+    const form = overlay.querySelector('form'), error = overlay.querySelector('.auth-error');
+    const fail = text => { error.textContent = text; error.classList.remove('hidden'); };
+    form.current.focus();
+    overlay.querySelector('[data-leave]').onclick = () => { if (forced) { signOut(); return; } overlay.remove(); resolve(); };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      error.classList.add('hidden');
+      if (form.next.value.length < 12) { fail('Use at least 12 characters.'); return; }
+      if (form.next.value !== form.again.value) { fail('The two new passwords are not the same.'); return; }
+      const button = form.querySelector('button[type=submit]'); button.disabled = true;
+      try {
+        applySession(await post('/api/auth/password', { current_password: form.current.value, new_password: form.next.value }));
+        overlay.remove();
+        if (!forced) notice('Password changed.', 'ok');
+        resolve();
+      } catch (err) { fail(err.message); } finally { button.disabled = false; }
+    };
+  }));
+}
+
+async function signOut() {
+  try { await post('/api/auth/logout'); } catch { /* the page reloads either way */ }
+  location.reload();
 }
 
 // The skip link must not change the hash (the hash is the route), so it moves focus instead.
 document.querySelector('.skip-link')?.addEventListener('click', e => { e.preventDefault(); document.querySelector('#main').focus(); });
-runSelect.onchange = () => { S.run = runSelect.value; S.filters = {}; S.page = 1; S.ov = null; store.set('l:MoSPI.run', S.run); route(); };
-reviewerInput.value = store.get('l:MoSPI.reviewer', '');
-reviewerInput.onchange = () => store.set('l:MoSPI.reviewer', reviewer());
+runSelect.onchange = () => { S.run = runSelect.value; S.filters = {}; S.page = 1; S.ov = null; store.set('l:MoSPI.run', S.run); runSelect.title = runLabel(currentRun()); route(); };
+document.querySelector('#signOut').onclick = signOut;
+document.querySelector('#pwButton').onclick = () => changePassword(false);
 
 (async () => {
   try {
     const required = await fetch('/api/session/required').then(r => r.json()).catch(() => ({ authentication: false }));
-    if (required.authentication) {
-      if (!authToken()) await signIn();
-      S.user = (await api('/api/session')).user;
-      if (S.user) { reviewerInput.value = S.user.name; reviewerInput.readOnly = true; document.querySelector('#verified').textContent = `signed in (${S.user.role})`; document.querySelector('#verified').classList.add('ok'); }
-    } else {
-      document.querySelector('#verified').textContent = 'not signed in: names are recorded as unverified';
-    }
+    S.auth = Boolean(required.authentication);
+    applySession(S.auth ? await api('/api/session') : {});          // without a session this asks for sign-in first
+    if (S.user?.must_change_password) await changePassword(true);
     [S.runs, S.labels, S.deploy] = await Promise.all([api('/api/runs'), api('/api/labels'), api('/api/deployment')]);
     modebar();
     if (!S.runs.length) {
-      runSelect.innerHTML = '<option>No validation run yet</option>';
+      renderRuns();
       if (S.deploy.review_only) { app.innerHTML = empty('No validation run has been published to this instance yet. Runs are produced on the processing machine and deployed here.'); return; }
-      if (!location.hash.startsWith('#/batch')) location.hash = '#/batch';
+      if (!location.hash.startsWith('#/batch') && !location.hash.startsWith('#/users')) location.hash = '#/batch';
       else await route();
       return;
     }
     const remembered = store.get('l:MoSPI.run', null);
     S.run = S.runs.some(r => r.directory === remembered) ? remembered : S.runs[0].directory;
-    runSelect.innerHTML = S.runs.map(r => `<option value="${esc(r.directory)}" ${r.directory === S.run ? 'selected' : ''}>${esc(runLabel(r))}</option>`).join('');
+    renderRuns();
     await route();
   } catch (e) {
     notice(e.message, 'error');

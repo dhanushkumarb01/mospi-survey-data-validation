@@ -3,8 +3,11 @@
 * :class:`SqliteAuditStore` - the existing per-run ``review_audit.sqlite`` (mospi/pipeline/stages/fusion/review.py, unchanged).
 * :class:`PostgresAuditStore` - the same events, the same SHA-256 chain per run, in PostgreSQL.  Validation, digest,
   legacy seal and verification are imported from review.py, never re-implemented, so the two cannot drift.
-* ``hosted=True`` - read-only access through the ``hosted_audit_*`` views (no comments, snapshots or corrected values);
-  chain verification is the latest result recorded on the processing machine.
+* ``hosted=True`` - reads go through the ``hosted_audit_*`` views (no comments, snapshots or corrected values);
+  chain verification is the latest result recorded on the processing machine.  Without a ``writer`` the store is read-only.
+  With a ``writer`` (the insert-only ``mospi_reviewer`` role) the hosted instance can append decisions and case views to a
+  run's chain - nothing else: no operations trail, no updates, no deletes (grants and row level security enforce it).
+  It reads only ids and hashes, so it starts a chain only for a run with no events; legacy rows are sealed locally.
 
 Appends are serialised per run with a transaction-scoped advisory lock (the PostgreSQL equivalent of
 ``BEGIN IMMEDIATE``), so concurrent writers cannot fork a chain, and a stale decision raises
@@ -33,6 +36,8 @@ OPERATIONS_RUN = "__operations__"
 OPERATION_EVENTS = {"DATASET_CREATED", "FILE_RECEIVED", "PREFLIGHT_COMPLETED", "DATASET_REJECTED", "VALIDATION_REQUESTED", "VALIDATION_STARTED",
                     "VALIDATION_SUCCEEDED", "VALIDATION_FAILED", "RUN_PUBLISHED", "JOB_RETRIED", "JOB_CANCELLED", "INTEGRITY_CHECK_COMPLETED",
                     "DATASET_REGISTERED", "AUDIT_MIGRATED", "HOSTING_APPROVED", "SERVING_SET_LOADED"}
+# What the hosted writer may append (exports stay on the processing machine); the database enforces the same list.
+HOSTED_EVENTS = {"DECISION_MADE", "CASE_VIEWED"}
 _ANY = review._ANY
 
 
@@ -66,10 +71,11 @@ class SqliteAuditStore:
 class PostgresAuditStore:
     backend = "postgres"
 
-    def __init__(self, db: Database, *, hosted: bool = False) -> None:
+    def __init__(self, db: Database, *, hosted: bool = False, writer: Database | None = None) -> None:
         self.db = db
         self.hosted = hosted
-        self.writable = not hosted
+        self.writer = writer if hosted else db            # hosted writes use their own, insert-only connection
+        self.writable = self.writer is not None
 
     # ------------------------------------------------------------ writing
 
@@ -107,19 +113,32 @@ class PostgresAuditStore:
 
     def register_run(self, run: str | Path) -> None:
         """Start the run's chain if it has none (idempotent; the PostgreSQL counterpart of review.initialise)."""
-        self._require_writable()
+        self._require_writable(operations=True)
         key = run_key(run)
         with self.db.transaction() as connection:
             self._lock(connection, key)
             self._initialise(connection, key)
 
+    def _hosted_head(self, connection, key: str) -> str:
+        """The hosted writer reads only ids and hashes: it may start the chain of a run with no events, but sealing legacy
+        rows (which reads their comments and snapshots) is left to the processing machine."""
+        head = self._last_hash(connection, key)
+        if head is not None:
+            return head
+        if connection.execute("SELECT 1 FROM audit_events WHERE run_id = %s LIMIT 1", (key,)).fetchone():
+            raise PermissionError("Decisions for this run can be recorded only on the processing machine until its earlier review history is sealed there.")
+        return self._insert(connection, key, {"case_id": "*", "event_type": "AUDIT_CHAIN_STARTED", "actor": "system", "event_timestamp_utc": _now(),
+                                              "comment": json.dumps(legacy_seal([])), "actor_authenticated": 1, "actor_role": "system"}, "GENESIS")["event_hash"]
+
     def append(self, run: str | Path, *, expected_last_decision_id: Any = _ANY, **fields: Any) -> dict[str, Any]:
         self._require_writable()
         event = build_event(**fields)
+        if self.hosted and event["event_type"] not in HOSTED_EVENTS:
+            raise PermissionError("The hosted instance records review decisions only.")
         key = run_key(run)
-        with self.db.transaction() as connection:
+        with self.writer.transaction() as connection:
             self._lock(connection, key)
-            head = self._initialise(connection, key)
+            head = self._hosted_head(connection, key) if self.hosted else self._initialise(connection, key)
             if event["event_type"] == "DECISION_MADE" and expected_last_decision_id is not _ANY:
                 latest = connection.execute("SELECT MAX(event_id) AS m FROM audit_events WHERE run_id = %s AND case_id = %s AND event_type = 'DECISION_MADE'",
                                             (key, event["case_id"])).fetchone()["m"]
@@ -131,7 +150,7 @@ class PostgresAuditStore:
     def append_operation(self, event_type: str, *, subject: str, actor: str, details: dict[str, Any] | None = None,
                          actor_authenticated: bool = False, actor_role: str | None = None, connection=None) -> dict[str, Any]:
         """Record an operation (upload, validation, publication, check) in the chained operations trail."""
-        self._require_writable()
+        self._require_writable(operations=True)
         if event_type not in OPERATION_EVENTS:
             raise ValueError(f"Unknown operation event {event_type!r}.")
         event = {"case_id": str(subject)[:200], "event_type": event_type, "actor": (str(actor or "system")[:120]).strip() or "system",
@@ -147,9 +166,10 @@ class PostgresAuditStore:
         with self.db.transaction() as conn:
             return write(conn)
 
-    def _require_writable(self) -> None:
-        if not self.writable:
-            raise PermissionError("This instance reads the audit trail only.")
+    def _require_writable(self, *, operations: bool = False) -> None:
+        if not self.writable or (operations and self.hosted):
+            raise PermissionError("This instance reads the audit trail only." if not self.writable
+                                  else "The hosted instance records review decisions only.")
 
     # ------------------------------------------------------------ reading
 
