@@ -20,7 +20,7 @@ from mospi.db.registry import register_existing
 from mospi.db.serving import HostedServingData, ServingError, build, load, verify
 from mospi.paths import REPO_ROOT
 
-from .conftest import USERS, auth
+from .conftest import SECRET, auth, seed_postgres
 
 pytestmark = pytest.mark.postgres
 DEMO = REPO_ROOT / "data" / "demo"
@@ -71,7 +71,8 @@ def test_row_level_security_is_on_for_every_table(pg):
     rows = pg["admin"].fetch("SELECT c.relname, c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
                              "WHERE n.nspname = %s AND c.relkind = 'r'", (pg["schema"],))
     assert rows and all(r["relrowsecurity"] for r in rows), [r["relname"] for r in rows if not r["relrowsecurity"]]
-    assert {r["policyname"] for r in pg["admin"].fetch("SELECT policyname FROM pg_policies WHERE schemaname = %s", (pg["schema"],))} == {"mospi_app_access"}
+    policies = {r["policyname"] for r in pg["admin"].fetch("SELECT policyname FROM pg_policies WHERE schemaname = %s", (pg["schema"],))}
+    assert policies in ({"mospi_app_access"}, {"mospi_app_access", "mospi_reviewer_read", "mospi_reviewer_insert"})   # reviewer policies exist with the role
 
 
 def test_platform_roles_and_public_can_read_nothing(pg, demo):
@@ -96,7 +97,7 @@ def test_reader_sees_only_the_hosted_views_and_never_a_base_table(pg, demo):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             reader.fetch(f'SELECT 1 FROM "{table}" LIMIT 1')
     assert {r["run_id"] for r in reader.fetch("SELECT run_id FROM hosted_serving_files")} == {DEMO_RUN}
-    assert reader.fetchone("SELECT version FROM hosted_schema_version")["version"] == "0004_hosted_serving"
+    assert reader.fetchone("SELECT version FROM hosted_schema_version")["version"] == "0005_users"
 
 
 # ------------------------------------------------------------------ the hosted serving set
@@ -132,11 +133,17 @@ def test_tampered_bytes_are_caught_in_the_database_and_never_served(pg, demo, tm
     assert not (tmp_path / "serving" / path).exists() and not list((tmp_path / "serving").rglob("*.partial"))
 
 
-def _hosted_client(pg, monkeypatch, tmp_path, url: str | None = None) -> TestClient:
+def _hosted_client(pg, monkeypatch, tmp_path, url: str | None = None, review_url: str | None = None) -> TestClient:
     monkeypatch.setenv("MOSPI_AUDIT_BACKEND", "postgres")
     monkeypatch.setenv("MOSPI_DATABASE_URL", url or pg["urls"]["reader"])
     monkeypatch.setenv("MOSPI_SERVING_DIR", str(tmp_path / "hosted-tmp"))
-    monkeypatch.setenv("MOSPI_USERS_JSON", USERS)
+    monkeypatch.setenv("MOSPI_SESSION_SECRET", SECRET)
+    if not pg["admin"].fetchone("SELECT count(*) AS n FROM app_users")["n"]:
+        seed_postgres(pg["admin"])
+    if review_url:
+        monkeypatch.setenv("MOSPI_REVIEW_DATABASE_URL", review_url)
+    else:
+        monkeypatch.delenv("MOSPI_REVIEW_DATABASE_URL", raising=False)
     import mospi.db.connection as connection
     monkeypatch.setattr(connection, "_SHARED", {})
     import mospi.app.vercel_app as module
@@ -147,7 +154,7 @@ def test_hosted_app_serves_the_same_pages_from_the_database_as_the_local_files(p
     from mospi.app.api import create_app
     client = _hosted_client(pg, monkeypatch, tmp_path)
     health = client.get("/healthz").json()
-    assert health["status"] == "ok" and health["database"]["schema_version"] == "0004_hosted_serving" and health["review_data"]["loaded"] is False
+    assert health["status"] == "ok" and health["database"]["schema_version"] == "0005_users" and health["review_data"]["loaded"] is False
     assert client.get("/api/runs").status_code == 401                               # nothing is fetched before sign-in
     assert not list((tmp_path / "hosted-tmp").rglob("*.parquet"))
     hosted = {path: client.get(path, headers=auth("supervisor")).json()
@@ -178,6 +185,157 @@ def test_hosted_app_refuses_plainly_when_the_database_is_unreachable(pg, monkeyp
     text = response.text.lower()
     assert "wrong-password" not in text and "127.0.0.1" not in text and "cannot be reached" in text
     assert client.get("/healthz").status_code == 503 and client.get("/healthz").json()["database"] == {"reachable": False}
+
+
+# ------------------------------------------------------------------ hosted decisions (insert-only mospi_reviewer role)
+
+
+DECISION = {"event_type": "DECISION_MADE", "decision": "CONFIRMED_ERROR", "reason_code": "EXTRA_OR_MISSING_ZERO", "verification_source": "PHONE_CALL",
+            "comment": "hosted reviewer note", "expected_last_decision_id": None}
+
+
+@pytest.fixture()
+def reviewer_url(pg):
+    """URL of the mospi_reviewer login.  The role is created by ``python -m mospi.db.migrate --roles`` with
+    MOSPI_DB_REVIEWER_PASSWORD set; without the role and its password these tests are skipped (never guessed)."""
+    import os
+    from psycopg.conninfo import make_conninfo
+    if not pg["admin"].fetchone("SELECT 1 FROM pg_roles WHERE rolname = 'mospi_reviewer'") or not (
+            os.environ.get("MOSPI_REVIEW_DATABASE_URL") or os.environ.get("MOSPI_DB_REVIEWER_PASSWORD")):
+        pytest.skip("the mospi_reviewer role and its URL or password are needed")
+    return os.environ.get("MOSPI_REVIEW_DATABASE_URL") or make_conninfo(pg["urls"]["app"], user="mospi_reviewer", password=os.environ["MOSPI_DB_REVIEWER_PASSWORD"])
+
+
+def _raw_insert(db, run_id: str, event_type: str, *, event_id: int = 900, authenticated: int = 1, chained: bool = True) -> None:
+    db.execute("INSERT INTO audit_events (run_id, event_id, case_id, event_type, actor, event_timestamp_utc, actor_authenticated, previous_hash, event_hash) "
+               "VALUES (%s, %s, 'c1', %s, 'role test', now()::text, %s, %s, %s)",
+               (run_id, event_id, event_type, authenticated, "p" if chained else None, f"h{event_id}" if chained else None))
+
+
+def test_reviewer_role_can_append_review_events_and_nothing_else(pg, demo, reviewer_url):
+    reviewer = Database(reviewer_url, schema=pg["schema"])
+    try:
+        _raw_insert(reviewer, DEMO_RUN, "CASE_VIEWED")                                  # the one thing it may do
+        refused = ["UPDATE audit_events SET actor = 'x'", "DELETE FROM audit_events", "TRUNCATE audit_events",
+                   "SELECT comment FROM audit_events", "SELECT evidence_snapshot_json FROM audit_events", "SELECT corrected_value FROM audit_events",
+                   "SELECT 1 FROM runs", "SELECT 1 FROM jobs", "SELECT 1 FROM hosted_serving_files", "INSERT INTO runs (run_id) VALUES ('x')",
+                   "INSERT INTO audit_verifications (run_id, status, checked_by) VALUES ('x', 'INTACT', 'x')"]
+        for statement in refused:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                reviewer.execute(statement)
+        # Row level security: no operations trail, no other event types, no unchained or unsigned rows, no run outside hosting.
+        pg["admin"].execute("INSERT INTO runs (run_id, release, observation, status, data_class) VALUES ('hidden_run', '2024', 'first_visit', 'REGISTERED', 'SYNTHETIC')")
+        for run_id, event_type, options in (("__operations__", "DECISION_MADE", {}), (DEMO_RUN, "RUN_PUBLISHED", {}), (DEMO_RUN, "EXPORT", {}),
+                                            (DEMO_RUN, "DECISION_MADE", {"authenticated": 0}), (DEMO_RUN, "DECISION_MADE", {"chained": False}),
+                                            ("hidden_run", "DECISION_MADE", {})):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                _raw_insert(reviewer, run_id, event_type, event_id=901, **options)
+        assert reviewer.fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE run_id = '__operations__'")["n"] == 0
+        assert pg["admin"].fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE run_id = '__operations__'")["n"] > 0   # it exists, unseen
+        assert [r["event_type"] for r in pg["admin"].fetch("SELECT event_type FROM audit_events WHERE run_id = %s", (DEMO_RUN,))] == ["CASE_VIEWED"]
+    finally:
+        reviewer.close()
+
+
+def test_reviewer_grants_and_policies_are_idempotent(pg, reviewer_url):
+    from mospi.db.migrate import REVIEWER_COLUMNS, apply_grants
+
+    def privileges():
+        columns = pg["admin"].fetch("SELECT column_name FROM information_schema.column_privileges WHERE grantee = 'mospi_reviewer' "
+                                    "AND table_schema = %s AND table_name = 'audit_events' AND privilege_type = 'SELECT' ORDER BY 1", (pg["schema"],))
+        tables = pg["admin"].fetch("SELECT table_name, privilege_type FROM information_schema.role_table_grants WHERE grantee = 'mospi_reviewer' "
+                                   "AND table_schema = %s ORDER BY 1, 2", (pg["schema"],))
+        policies = pg["admin"].fetch("SELECT policyname, cmd FROM pg_policies WHERE schemaname = %s AND 'mospi_reviewer' = ANY(roles) ORDER BY 1", (pg["schema"],))
+        return [r["column_name"] for r in columns], [(r["table_name"], r["privilege_type"]) for r in tables], [(r["policyname"], r["cmd"]) for r in policies]
+
+    before = privileges()
+    apply_grants(pg["admin"])
+    apply_grants(pg["admin"])
+    assert privileges() == before
+    columns, tables, policies = before
+    assert columns == sorted(REVIEWER_COLUMNS)
+    assert tables == [("audit_events", "INSERT"), ("hosted_runs", "SELECT")]
+    assert policies == [("mospi_reviewer_insert", "INSERT"), ("mospi_reviewer_read", "SELECT")]
+
+
+def test_hosted_app_records_a_decision_in_the_chain_and_shows_it_back(pg, demo, reviewer_url, monkeypatch, tmp_path):
+    from mospi.db.audit import PostgresAuditStore
+    client = _hosted_client(pg, monkeypatch, tmp_path, review_url=reviewer_url)
+    assert client.get("/healthz").json()["audit_store"] == "append-only"
+    deployment = client.get("/api/deployment", headers=auth("supervisor")).json()
+    assert deployment["audit_writable"] is True and deployment["exports"] is False and deployment["notes_shown"] is False
+    case = client.get("/api/cases?limit=1", headers=auth("supervisor")).json()["rows"][0]["case_id"]
+    assert client.post(f"/api/cases/{case}/events", headers=auth("analyst"), json=DECISION).status_code == 403    # role still checked
+    assert client.post(f"/api/cases/{case}/events", headers=auth("supervisor"), json={"event_type": "CASE_VIEWED"}).status_code == 200
+    saved = client.post(f"/api/cases/{case}/events", headers=auth("supervisor"), json={**DECISION, "actor": "typed name"})
+    assert saved.status_code == 200 and saved.json()["actor"] == "Test supervisor"                                   # the signed-in name
+    again = client.post(f"/api/cases/{case}/events", headers=auth("admin"), json=DECISION)
+    assert again.status_code == 409                                                                                  # stale decision refused
+    history = client.get(f"/api/cases/{case}", headers=auth("supervisor")).json()["audit_history"]
+    assert [h["event_type"] for h in history] == ["CASE_VIEWED", "DECISION_MADE"] and history[1]["decision"] == "CONFIRMED_ERROR"
+    assert "hosted reviewer note" not in json.dumps(history)                                                         # notes stay off the hosted views
+    assert pg["admin"].fetchone("SELECT comment FROM audit_events WHERE run_id = %s AND event_type = 'DECISION_MADE'", (DEMO_RUN,))["comment"] == "hosted reviewer note"
+    events = pg["admin"].fetch("SELECT event_type, actor_role, origin FROM audit_events WHERE run_id = %s ORDER BY event_id", (DEMO_RUN,))
+    assert [e["event_type"] for e in events] == ["AUDIT_CHAIN_STARTED", "CASE_VIEWED", "DECISION_MADE"]
+    assert PostgresAuditStore(pg["app"]).verify(DEMO_RUN)["status"] == "INTACT"                                      # chain unbroken
+    for role in ("admin", "supervisor"):
+        assert client.get("/api/export/queue", headers=auth(role)).status_code == 503
+    assert pg["admin"].fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE event_type = 'EXPORT'")["n"] == 0
+
+
+def test_hosted_app_without_the_reviewer_url_stays_read_only(pg, demo, monkeypatch, tmp_path):
+    client = _hosted_client(pg, monkeypatch, tmp_path)
+    assert client.get("/healthz").json()["audit_store"] == "read-only"
+    assert client.get("/api/deployment", headers=auth("supervisor")).json()["audit_writable"] is False
+    case = client.get("/api/cases?limit=1", headers=auth("supervisor")).json()["rows"][0]["case_id"]
+    response = client.post(f"/api/cases/{case}/events", headers=auth("supervisor"), json=DECISION)
+    assert response.status_code == 503 and response.json()["detail"].startswith("Decisions are recorded on the processing machine")
+    assert pg["admin"].fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE run_id = %s", (DEMO_RUN,))["n"] == 0
+
+
+def test_two_concurrent_hosted_decisions_leave_one_saved_and_one_conflict(pg, demo, reviewer_url):
+    import threading
+    from mospi.db.audit import PostgresAuditStore
+    from mospi.pipeline.stages.fusion.review import DecisionConflict
+    reviewer = Database(reviewer_url, schema=pg["schema"])
+    stores = [PostgresAuditStore(pg["reader"], hosted=True, writer=reviewer) for _ in range(2)]
+    stores[0].append(DEMO_RUN, case_id="c1", event_type="CASE_VIEWED", actor="warm-up", actor_authenticated=True, actor_role="supervisor")
+    barrier, outcomes = threading.Barrier(2), []
+
+    def decide(store, name):
+        barrier.wait()
+        try:
+            store.append(DEMO_RUN, case_id="c1", event_type="DECISION_MADE", actor=name, decision="CONFIRMED_ERROR", reason_code="EXTRA_OR_MISSING_ZERO",
+                         verification_source="PHONE_CALL", actor_authenticated=True, actor_role="supervisor", expected_last_decision_id=None)
+            outcomes.append("saved")
+        except DecisionConflict:
+            outcomes.append("conflict")
+
+    try:
+        threads = [threading.Thread(target=decide, args=(store, f"reviewer {i}")) for i, store in enumerate(stores)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        assert sorted(outcomes) == ["conflict", "saved"]
+        assert pg["admin"].fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE run_id = %s AND event_type = 'DECISION_MADE'", (DEMO_RUN,))["n"] == 1
+        assert PostgresAuditStore(pg["app"]).verify(DEMO_RUN)["status"] == "INTACT"
+    finally:
+        reviewer.close()
+
+
+def test_hosted_writer_leaves_sealing_earlier_history_to_the_processing_machine(pg, demo, reviewer_url):
+    from mospi.db.audit import PostgresAuditStore
+    pg["admin"].execute("INSERT INTO audit_events (run_id, event_id, case_id, event_type, actor, event_timestamp_utc, comment) "
+                        "VALUES (%s, 1, 'c1', 'DECISION_MADE', 'legacy', now()::text, 'legacy note')", (DEMO_RUN,))
+    reviewer = Database(reviewer_url, schema=pg["schema"])
+    try:
+        with pytest.raises(PermissionError, match="processing machine"):
+            PostgresAuditStore(pg["reader"], hosted=True, writer=reviewer).append(DEMO_RUN, case_id="c1", event_type="CASE_VIEWED", actor="x",
+                                                                                   actor_authenticated=True, actor_role="supervisor")
+        assert pg["admin"].fetchone("SELECT COUNT(*) AS n FROM audit_events WHERE run_id = %s", (DEMO_RUN,))["n"] == 1
+    finally:
+        reviewer.close()
 
 
 # ------------------------------------------------------------------ hosting approval

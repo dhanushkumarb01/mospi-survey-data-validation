@@ -28,7 +28,7 @@ DECISION = {"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "rea
 def test_migrations_are_recorded_and_a_second_run_applies_nothing(pg):
     assert apply(pg["admin"]) == []
     state = status(pg["admin"])
-    assert state["pending"] == [] and state["changed"] == [] and len(state["applied"]) == 4
+    assert state["pending"] == [] and state["changed"] == [] and len(state["applied"]) == 5
     pg["admin"].execute("UPDATE schema_migrations SET checksum = 'edited' WHERE version = '0001_audit'")
     with pytest.raises(MigrationError, match="changed after it was applied"):
         apply(pg["admin"])
@@ -287,3 +287,38 @@ def test_registering_runs_from_a_relative_path_records_data_root_relative_manife
     assert {status for _, status, _ in check_run(row, [root], settings())} == {"PASSED"}
     legacy = {**row, "manifest": {**manifest, "files": [{**f, "path": f"{f['stage']}/{f['path'].split('/', 3)[3]}"} for f in manifest["files"]]}}
     assert {status for _, status, _ in check_run(legacy, [root], settings())} == {"PASSED"}
+
+
+# ------------------------------------------------------------------ accounts (0005_users.sql)
+
+
+def test_the_database_keeps_administrator_accounts_out_of_reach_of_the_runtime_roles(pg):
+    from mospi.auth import AccountError, PostgresUserStore
+    from mospi.auth.passwords import hash_password
+    owner, app = PostgresUserStore(pg["admin"], origin="cli"), PostgresUserStore(pg["app"])
+    hashed = hash_password("a long test passphrase")
+    admin = owner.create(username="chief", display_name="Chief", role="admin", password_hash=hashed, created_by="tests", allow_admin=True)
+    supervisor = app.create(username="sup.one", display_name="Sup One", role="supervisor", password_hash=hashed, created_by="Chief")
+    for statement, values in (
+            ("INSERT INTO app_users (username, display_name, role, password_hash, created_by) VALUES ('x.admin', 'X', 'admin', %s, 't')", (hashed,)),
+            ("UPDATE app_users SET role = 'admin' WHERE user_id = %s", (supervisor["user_id"],)),
+            ("UPDATE app_users SET active = false WHERE user_id = %s", (admin["user_id"],)),
+            ("UPDATE app_users SET username = 'renamed' WHERE user_id = %s", (supervisor["user_id"],)),
+            ("UPDATE app_users SET password_hash = 'plain text' WHERE user_id = %s", (supervisor["user_id"],)),
+            ("DELETE FROM app_users WHERE user_id = %s", (supervisor["user_id"],)),
+            ("UPDATE auth_events SET actor = 'someone else'", None)):
+        with pytest.raises(psycopg.Error):
+            pg["app"].execute(statement, values)
+    # An administrator may still change their own password through the app role.
+    assert app.change_password(admin["user_id"], hashed, hash_password("another long passphrase"))
+    with pytest.raises(AccountError):
+        app.update(admin["user_id"], actor="someone", active=False)
+    # The reader sees no account table at all: only the two look-up functions, which never list accounts.
+    with pytest.raises(psycopg.Error):
+        pg["reader"].fetch("SELECT * FROM app_users")
+    record = pg["reader"].fetchone("SELECT * FROM auth_login_record(%s)", ("  SUP.ONE ",))
+    assert record["user_id"] == supervisor["user_id"] and record["password_hash"].startswith("scrypt$")
+    assert "password_hash" not in pg["reader"].fetchone("SELECT * FROM auth_session_record(%s)", (supervisor["user_id"],))
+    for function in ("SELECT auth_note_attempt('sup.one', true)", "SELECT auth_change_password(1, 'a', 'b')"):
+        with pytest.raises(psycopg.Error):
+            pg["reader"].fetch(function)                         # the reviewer's functions, not the reader's

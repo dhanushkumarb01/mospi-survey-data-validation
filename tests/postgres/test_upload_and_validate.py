@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from mospi.app.api import create_app
 from mospi.db.audit import OPERATIONS_RUN, PostgresAuditStore
 from mospi.pipeline.stages.preprocessing.config import CONTRACTS
-from tests.postgres.conftest import USERS, auth
+from tests.postgres.conftest import auth, signed_in
 from tests.synthetic_raw import write_raw_delivery
 
 pytestmark = pytest.mark.postgres
@@ -44,7 +44,7 @@ def _ops(env):
 
 def _client(env, **options) -> TestClient:
     ops = options.pop("operations", None) or _ops(env)
-    return TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], users_json=USERS, batch_datasets={},
+    return TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], batch_datasets={}, **signed_in(),
                                  audit_store=PostgresAuditStore(env["pg"]["app"]), operations=ops, **options))
 
 
@@ -100,7 +100,7 @@ def test_upload_to_published_run_to_dashboard_to_audit(env):
 
     _run_worker(env)
 
-    job = client.get(f"/api/jobs/{job['job_id']}", headers=auth("technical")).json()
+    job = client.get(f"/api/jobs/{job['job_id']}", headers=auth("analyst")).json()
     assert job["status"] == "SUCCEEDED", (job["error_class"], job["error_message"], job["events"][-3:])
     stages = {e["stage"] for e in job["events"] if e["status"] in ("COMPLETED", "REUSED")}
     assert {"staging", "preparation", "peer", "statistical", "contextual", "ml", "pattern", "historical", "integrity", "fusion", "publication"} <= stages
@@ -116,7 +116,7 @@ def test_upload_to_published_run_to_dashboard_to_audit(env):
     case_id = client.get("/api/cases", params={"run": run_id, "tier": "A"}, headers=auth("supervisor")).json()["rows"][0]["case_id"]
     assert client.post(f"/api/cases/{case_id}/events", params={"run": run_id}, json=DECISION, headers=auth("supervisor")).status_code == 200
     assert client.get(f"/api/cases/{case_id}", params={"run": run_id}, headers=auth("supervisor")).json()["review_status"] == "CONFIRMED_ERROR"
-    assert client.get("/api/audit/verify", params={"run": run_id}, headers=auth("technical")).json()["status"] == "INTACT"
+    assert client.get("/api/audit/verify", params={"run": run_id}, headers=auth("analyst")).json()["status"] == "INTACT"
     store = PostgresAuditStore(env["pg"]["app"])
     operations_trail = [e["event_type"] for e in store.all_events(OPERATIONS_RUN)]
     for event in ("DATASET_CREATED", "FILE_RECEIVED", "PREFLIGHT_COMPLETED", "VALIDATION_REQUESTED", "VALIDATION_STARTED", "VALIDATION_SUCCEEDED", "RUN_PUBLISHED"):
@@ -124,10 +124,10 @@ def test_upload_to_published_run_to_dashboard_to_audit(env):
     assert store.verify(OPERATIONS_RUN)["status"] == "INTACT"
     status = client.get("/api/operations", headers=auth("supervisor")).json()
     assert any(r["run_id"] == run_id and r["status"] == "PUBLISHED" for r in status["runs"]) and not status["active_jobs"]
-    assert any(n["kind"] == "RUN_PUBLISHED" for n in client.get("/api/notifications", headers=auth("technical")).json()["notifications"])
+    assert any(n["kind"] == "RUN_PUBLISHED" for n in client.get("/api/notifications", headers=auth("analyst")).json()["notifications"])
 
     # Hosted reader: nothing until the run is cleared for hosting; then decisions without the comment, read-only.
-    hosted = TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], users_json=USERS, review_only=True, audit_read_only=True,
+    hosted = TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], **signed_in(), review_only=True, audit_read_only=True,
                                    require_authentication=True, audit_store=PostgresAuditStore(env["pg"]["reader"], hosted=True),
                                    operations=HostedOperations(env["pg"]["reader"])))
     assert hosted.get(f"/api/cases/{case_id}", params={"run": run_id}, headers=auth("supervisor")).json()["audit_history"] == []
@@ -141,18 +141,18 @@ def test_upload_to_published_run_to_dashboard_to_audit(env):
     # Periodic integrity check (operation A): passes, then catches a changed published artifact; never starts a rerun.
     assert client.post("/api/checks", headers=auth("admin")).status_code == 200
     _run_worker(env)
-    check = client.get("/api/jobs", params={"kind": "INTEGRITY_CHECK"}, headers=auth("technical")).json()["jobs"][0]
-    assert check["status"] == "SUCCEEDED", client.get(f"/api/jobs/{check['job_id']}", headers=auth("technical")).json()["findings"][:5]
+    check = client.get("/api/jobs", params={"kind": "INTEGRITY_CHECK"}, headers=auth("analyst")).json()["jobs"][0]
+    assert check["status"] == "SUCCEEDED", client.get(f"/api/jobs/{check['job_id']}", headers=auth("analyst")).json()["findings"][:5]
     with open(env["root"] / "fusion" / "runs" / run_id / "fusion_report.md", "ab") as handle:
         handle.write(b"\nedited by hand\n")
     client.post("/api/checks", headers=auth("admin"))
     _run_worker(env)
-    check = client.get(f"/api/jobs/{client.get('/api/jobs', params={'kind': 'INTEGRITY_CHECK'}, headers=auth('technical')).json()['jobs'][0]['job_id']}",
-                       headers=auth("technical")).json()
+    check = client.get(f"/api/jobs/{client.get('/api/jobs', params={'kind': 'INTEGRITY_CHECK'}, headers=auth('analyst')).json()['jobs'][0]['job_id']}",
+                       headers=auth("analyst")).json()
     assert check["status"] == "FAILED" and check["error_class"] == "INTEGRITY_FINDINGS"
     assert any(f["target_id"] == run_id and f["check_name"] == "artifacts_unchanged" and f["status"] == "FAILED" for f in check["findings"])
     assert client.get("/api/operations", headers=auth("supervisor")).json()["last_check"]["status"] == "FAILED"
-    assert len(client.get("/api/jobs", params={"kind": "VALIDATION"}, headers=auth("technical")).json()["jobs"]) == 1     # no unnecessary rerun
+    assert len(client.get("/api/jobs", params={"kind": "VALIDATION"}, headers=auth("analyst")).json()["jobs"]) == 1     # no unnecessary rerun
 
 
 # ------------------------------------------------------------------ pre-flight refusals
@@ -218,10 +218,10 @@ def test_uploads_and_operations_require_the_right_role_and_a_local_instance(env)
     client = _client(env)
     assert client.post("/api/datasets", json={"contract": "2024_first"}).status_code == 401
     assert client.post("/api/datasets", json={"contract": "2024_first"}, headers=auth("supervisor")).status_code == 403
-    assert client.post("/api/datasets", json={"contract": "2024_first"}, headers=auth("technical")).status_code == 403
-    assert client.get("/api/datasets", headers=auth("technical")).status_code == 200
+    assert client.post("/api/datasets", json={"contract": "2024_first"}, headers=auth("analyst")).status_code == 403
+    assert client.get("/api/datasets", headers=auth("analyst")).status_code == 200
     assert client.get("/api/datasets", headers=auth("supervisor")).status_code == 403
-    assert client.post("/api/checks", headers=auth("technical")).status_code == 403
+    assert client.post("/api/checks", headers=auth("analyst")).status_code == 403
     assert client.get("/api/operations", headers=auth("supervisor")).status_code == 200
     no_users = TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], batch_datasets={}, operations=_ops(env),
                                      audit_store=PostgresAuditStore(env["pg"]["app"])))
@@ -230,7 +230,7 @@ def test_uploads_and_operations_require_the_right_role_and_a_local_instance(env)
     assert review_only.post("/api/datasets", json={"contract": "2024_first"}, headers=auth("admin")).status_code == 403
     hosted = _client(env, operations=HostedOperations(env["pg"]["reader"]))
     assert hosted.post("/api/checks", headers=auth("admin")).status_code == 403
-    sqlite_only = TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], users_json=USERS, batch_datasets={}))
+    sqlite_only = TestClient(create_app(env["root"] / "fusion" / "runs", project_root=env["root"], batch_datasets={}, **signed_in()))
     assert sqlite_only.get("/api/datasets", headers=auth("admin")).status_code == 404
     assert sqlite_only.get("/api/operations", headers=auth("admin")).json()["available"] is False
 
@@ -258,14 +258,14 @@ def test_cancel_interruption_and_automatic_retry_resume_without_overwriting(env)
     partial.mkdir(parents=True)
     (partial / "half-written.parquet").write_bytes(b"partial")
     assert recover(ops) == [job["job_id"]]
-    interrupted = client.get(f"/api/jobs/{job['job_id']}", headers=auth("technical")).json()
+    interrupted = client.get(f"/api/jobs/{job['job_id']}", headers=auth("analyst")).json()
     assert interrupted["status"] == "INTERRUPTED"
     retry = env["pg"]["admin"].fetchone("SELECT * FROM jobs WHERE parent_job_id = %s", (job["job_id"],))
     assert retry["status"] == "QUEUED" and retry["attempt"] == 2 and retry["trigger"] == "RETRY"
     assert "2024_first_visit_resume" not in {r["directory"] for r in client.get("/api/runs", headers=auth("supervisor")).json()}
 
     _run_worker(env)
-    done = client.get(f"/api/jobs/{retry['job_id']}", headers=auth("technical")).json()
+    done = client.get(f"/api/jobs/{retry['job_id']}", headers=auth("analyst")).json()
     assert done["status"] == "SUCCEEDED", done["error_message"]
     assert any("set aside" in (e["message"] or "") for e in done["events"])
     assert list(partial.parent.glob("2024_first_visit_resume.incomplete-*/half-written.parquet"))       # kept, never deleted

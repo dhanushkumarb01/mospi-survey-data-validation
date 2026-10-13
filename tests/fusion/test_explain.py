@@ -200,22 +200,18 @@ def test_export_streams_every_row_not_first_10000(project):
     assert text[0].startswith("position,") and len(text) == 1 + 2
 
 
-def test_authentication_roles_and_audit_identity(project, tmp_path):
-    import hashlib
-    users = tmp_path / "users.json"
-    users.write_text(json.dumps({"users": [
-        {"name": "S. Supervisor", "role": "supervisor", "token_sha256": hashlib.sha256(b"sup-token").hexdigest()},
-        {"name": "T. Analyst", "role": "technical", "token_sha256": hashlib.sha256(b"tech-token").hexdigest()}]}), encoding="utf-8")
-    client = TestClient(create_app(project / "fusion" / "runs", users_file=users))
+def test_authentication_roles_and_audit_identity(project):
+    from tests.auth_support import auth, signed_in
+    client = TestClient(create_app(project / "fusion" / "runs", **signed_in()))
     assert client.get("/api/overview").status_code == 401
     assert client.get("/api/session/required").json() == {"authentication": True}
-    sup = {"Authorization": "Bearer sup-token"}
+    sup = auth("supervisor")
     decision = {"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "reason_code": "OTHER", "verification_source": "PHONE_CALL"}
     saved = client.post("/api/cases/case_a/events", headers=sup, json={**decision, "actor": "someone else"})
-    assert saved.status_code == 200 and saved.json()["actor"] == "S. Supervisor" and saved.json()["actor_authenticated"] == 1   # typed names cannot impersonate
-    tech = client.post("/api/cases/case_a/events", headers={"Authorization": "Bearer tech-token"}, json=decision)
-    assert tech.status_code == 403
-    assert client.get("/api/export/queue", headers={"Authorization": "Bearer tech-token"}).status_code == 403     # export is role-gated
+    assert saved.status_code == 200 and saved.json()["actor"] == "Test supervisor" and saved.json()["actor_authenticated"] == 1   # typed names cannot impersonate
+    analyst = client.post("/api/cases/case_a/events", headers=auth("analyst"), json=decision)
+    assert analyst.status_code == 403
+    assert client.get("/api/export/queue", headers=auth("analyst")).status_code == 403     # export is role-gated
     assert client.get("/api/export/queue", headers=sup).status_code == 200
     assert any(e["event_type"] == "EXPORT" for e in __import__("mospi.pipeline.stages.fusion.review", fromlist=["all_events"]).all_events(
         next((project / "fusion" / "runs").glob("*")) / "review_audit.sqlite"))
@@ -250,10 +246,8 @@ def test_case_story_gives_short_checks_and_plain_importance(project):
 
 
 def test_health_reports_readiness_without_authentication_or_paths(project, tmp_path):
-    import hashlib
-    users = tmp_path / "users.json"
-    users.write_text(json.dumps({"users": [{"name": "S", "role": "supervisor", "token_sha256": hashlib.sha256(b"t").hexdigest()}]}), encoding="utf-8")
-    client = TestClient(create_app(project / "fusion" / "runs", users_file=users))
+    from tests.auth_support import signed_in
+    client = TestClient(create_app(project / "fusion" / "runs", **signed_in()))
     response = client.get("/healthz")
     assert response.status_code in (200, 503)            # fixture source runs are partial; the endpoint must still answer
     body = response.json()
@@ -271,13 +265,19 @@ def test_export_file_is_mospi_named(project):
     assert "mospi-review-queue.csv" in response.headers["content-disposition"]
 
 
-def test_server_refuses_network_bind_without_auth_unless_container_opt_in(monkeypatch):
+def test_server_always_requires_sign_in(monkeypatch, project, tmp_path):
     import sys
     from mospi.app import serve
-    monkeypatch.setattr(serve.uvicorn, "run", lambda *a, **k: None)
-    monkeypatch.delenv("MOSPI_CONTAINER", raising=False)
-    monkeypatch.setattr(sys, "argv", ["serve", "--host", "0.0.0.0"])
-    with pytest.raises(SystemExit):
+    served = []
+    monkeypatch.setattr(serve.uvicorn, "run", lambda app, **_: served.append(app))
+    monkeypatch.delenv("MOSPI_DATABASE_URL", raising=False)
+    monkeypatch.setenv("MOSPI_AUDIT_BACKEND", "sqlite")
+    monkeypatch.setenv("MOSPI_USERS_DB", str(tmp_path / "auth" / "users.sqlite"))
+    for host in ("127.0.0.1", "0.0.0.0"):
+        monkeypatch.setattr(sys, "argv", ["serve", "--host", host, "--fusion-root", str(project / "fusion" / "runs")])
         serve.main()
-    monkeypatch.setenv("MOSPI_CONTAINER", "1")
-    serve.main()                                          # explicit container opt-in is allowed
+    for app in served:
+        client = TestClient(app)
+        assert client.get("/api/session/required").json() == {"authentication": True}
+        assert client.get("/api/overview").status_code == 401
+    assert (tmp_path / "auth" / "users.sqlite").is_file()          # no database configured: the account file

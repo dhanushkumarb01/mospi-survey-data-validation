@@ -5,9 +5,12 @@ Local and Docker serving keep using ``python -m mospi.app.serve``; nothing here 
 On Vercel the app is always:
 * review-only - batch validation and uploads cannot be started (Vercel Functions cannot run the batch, and the
   project directory is read-only);
-* audit read-only - decisions are recorded only on the local instance; the hosted instance reads the review history
-  and the chain verification recorded there;
-* sign-in required - every /api request needs a bearer token from ``MOSPI_USERS_JSON`` (SHA-256 hashes only).
+* audit append-only - with ``MOSPI_REVIEW_DATABASE_URL`` (the insert-only ``mospi_reviewer`` role) signed-in supervisors
+  and administrators record decisions straight into the Supabase audit trail; without it decisions are refused.  History
+  and the chain verification recorded on the processing machine are read through the reader views;
+* sign-in required - accounts are read from the database through the reader's two sign-in functions (mospi/auth); every
+  /api request but sign-in needs a session cookie signed with ``MOSPI_SESSION_SECRET``.  With the reviewer connection,
+  failed sign-ins lock an account and account holders can set their own password here.
 
 Data (``MOSPI_AUDIT_BACKEND=postgres``, the hosted set-up): ``MOSPI_DATABASE_URL`` is the **reader** role on the Supabase
 transaction pooler (``sslmode=verify-full`` with ``MOSPI_DB_CA_FILE=deploy/supabase/prod-ca-2021.crt``).  The review
@@ -22,7 +25,7 @@ plain-language message, and nothing is served from anywhere else.
 Without ``MOSPI_AUDIT_BACKEND=postgres`` the synthetic demonstration bundle (``MOSPI_DATA_DIR``, default ``data/demo``)
 is served as before; it is not uploaded in the Supabase set-up (.vercelignore).
 
-Environment: ``MOSPI_AUDIT_BACKEND``, ``MOSPI_DATABASE_URL``, ``MOSPI_DB_CA_FILE``, ``MOSPI_USERS_JSON``,
+Environment: ``MOSPI_AUDIT_BACKEND``, ``MOSPI_DATABASE_URL``, ``MOSPI_REVIEW_DATABASE_URL`` (optional), ``MOSPI_DB_CA_FILE``, ``MOSPI_SESSION_SECRET``,
 ``MOSPI_DB_MAX_CONNECTIONS`` (default 3 here), ``MOSPI_CODE_VERSION``, ``MOSPI_ALLOW_ANONYMOUS_DEMO`` (synthetic bundle only).
 """
 from __future__ import annotations
@@ -34,8 +37,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from mospi.auth import store_from_env
+
 from . import backends
-from .api import _load_users, create_app, env_flag
+from .api import create_app, env_flag
 
 PROJECT = Path(__file__).resolve().parents[2]
 log = logging.getLogger("MoSPI.vercel")
@@ -53,18 +58,6 @@ def _synthetic(root: Path) -> bool:
         return False
 
 
-def _users() -> str | None:
-    users_json = os.environ.get("MOSPI_USERS_JSON", "").strip() or None
-    if users_json:
-        try:
-            _load_users(None, users_json)
-        except (ValueError, TypeError, KeyError, AttributeError):
-            # Never echo the value: it holds token hashes.  Serving continues with every /api call refused.
-            log.error("MOSPI_USERS_JSON is not a valid users document; every /api request will be refused until it is fixed.")
-            users_json = None
-    return users_json
-
-
 def _not_configured(reason: str):
     from mospi.db.connection import DatabaseUnavailable
 
@@ -73,7 +66,7 @@ def _not_configured(reason: str):
     return refuse
 
 
-def build_postgres(users_json: str | None) -> object:
+def build_postgres() -> object:
     """Hosted instance reading everything from the database through the reader views."""
     os.environ.setdefault("MOSPI_DB_MAX_CONNECTIONS", "3")          # serverless: a few connections per instance
     from mospi.db.connection import DatabaseUnavailable, database_from_env
@@ -83,9 +76,10 @@ def build_postgres(users_json: str | None) -> object:
     try:
         audit_store, operations = backends.build(root / "fusion" / "runs", root, hosted=True)
         db = database_from_env(application_name="mospi-hosted", read_only=True)
+        users = store_from_env(hosted=True)
     except Exception as error:   # noqa: BLE001 - misconfiguration: refuse data requests plainly, never fall back
         log.error("Hosted database is not configured correctly (%s).", type(error).__name__)
-        return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True, require_authentication=True,
+        return create_app(root / "fusion" / "runs", root, review_only=True, audit_read_only=True, require_authentication=True,
                           before_data=_not_configured("The hosted database connection is not configured."), hosted=True,
                           health_check=lambda: ({"status": "unavailable", "database": {"configured": False}}, 503))
     serving = HostedServingData(db, root)
@@ -97,14 +91,14 @@ def build_postgres(users_json: str | None) -> object:
             database = {"reachable": True, "tls": bool(info.get("ssl")), "schema_version": version.get("version"), "migrations": version.get("migrations")}
         except DatabaseUnavailable:
             return {"status": "unavailable", "database": {"reachable": False}, "review_data": serving.status()}, 503
-        return {"status": "ok", "database": database, "review_data": serving.status(), "audit_store": "read-only", "audit_backend": "postgres"}, 200
+        return {"status": "ok", "database": database, "review_data": serving.status(), "audit_store": "append-only" if audit_store.writable else "read-only",
+                "audit_backend": "postgres"}, 200
 
-    return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True, require_authentication=True,
-                      audit_store=audit_store, operations=operations, before_data=serving.ensure, health_check=health, hosted=True)
+    return create_app(root / "fusion" / "runs", root, users=users, review_only=True, audit_read_only=not audit_store.writable, require_authentication=True,
+                      audit_store=audit_store, operations=operations, before_data=serving.ensure, health_check=health, hosted=True, allow_export=False)
 
 
 def build() -> object:
-    users_json = _users()
     try:
         backend = backends.audit_backend()
     except backends.BackendError as error:
@@ -112,13 +106,13 @@ def build() -> object:
         backend = "postgres"                    # an invalid value must not silently serve something else: refuse plainly
         os.environ["MOSPI_AUDIT_BACKEND"] = "invalid"
     if backend == "postgres":
-        return build_postgres(users_json)
+        return build_postgres()
     root = _data_root()
     anonymous_demo = env_flag("MOSPI_ALLOW_ANONYMOUS_DEMO") and _synthetic(root)
     if env_flag("MOSPI_ALLOW_ANONYMOUS_DEMO") and not anonymous_demo:
         log.error("MOSPI_ALLOW_ANONYMOUS_DEMO is ignored: the data directory is not marked synthetic.")
-    return create_app(root / "fusion" / "runs", root, users_json=users_json, review_only=True, audit_read_only=True,
-                      require_authentication=not anonymous_demo)
+    # The synthetic bundle has no database, so no accounts: it is served only as the anonymous demonstration, never with sign-in.
+    return create_app(root / "fusion" / "runs", root, review_only=True, audit_read_only=True, require_authentication=not anonymous_demo)
 
 
 app = build()

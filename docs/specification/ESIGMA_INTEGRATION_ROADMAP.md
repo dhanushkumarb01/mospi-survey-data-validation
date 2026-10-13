@@ -15,7 +15,7 @@ eSigma internals (APIs, identity provider, hosting, CAPI event model, enumerator
 | Documented integrity rules | `integrity/rules/*.yaml` (person and household level, cited, self-tested, dry-run per batch) | Implemented |
 | Supervisor review and audit | local web workspace; decision taxonomy with reason codes; append-only, hash-chained SQLite audit with evidence snapshots | Implemented (single file; PostgreSQL store is a later stage) |
 | Decisions out | `GET /api/reviews` (case, decision, reason, verification source, corrected item and value) and CSV export of any review list | Implemented; no push to eSigma |
-| Authentication | optional bearer tokens with supervisor / technical / admin roles (`--users-file`) | Prototype; not GoI-approved identity |
+| Authentication | password sign-in with administrator / supervisor / analyst roles (`mospi/auth`) | Prototype; not GoI-approved identity |
 
 **Not implemented in this stage (deliberately):** any connection to eSigma, an ingestion API that stores submissions (idempotency, revisions), a scheduler/drop zone, and PostgreSQL stores. Nothing in the code simulates eSigma. The boundary the platform expects is: per household, the schedule's Block 1–6 items in the agreed layout plus schema version, visit and revision; optionally `investigator_id`, `supervisor_id` and timestamps (the paper schedule has an enumerator code in Block 2, but the released files do not carry it, so the enumerator lane cannot be built or tested now).
 
@@ -33,7 +33,7 @@ Requires: agreed file drop and layout versioning; a documented mapping for any n
 2. The platform returns rule breaches and comparison-group positions; eSigma shows them to the enumerator/supervisor as soft prompts.
 3. Reference distributions are those of the last approved platform run (provenance returned with every response).
 
-Requires *[needs HSD/eSigma confirmation]*: service authentication (mutual TLS or the GoI identity provider in place of local tokens), network placement, latency budget, concept-to-eSigma field mapping, and whether eSigma can show advisory prompts.
+Requires *[needs HSD/eSigma confirmation]*: service authentication (mutual TLS or the GoI identity provider in place of local passwords), network placement, latency budget, concept-to-eSigma field mapping, and whether eSigma can show advisory prompts.
 
 ## Phase C — integrated supervision
 

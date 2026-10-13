@@ -4,7 +4,6 @@ Each test builds its own small Fusion run in a temporary directory; no stored ru
 """
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import re
@@ -19,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from mospi.app.api import create_app
 from mospi.pipeline.stages.fusion.review import DecisionConflict, append_event, latest_statuses, verify_chain
+from tests.auth_support import auth, signed_in
 
 ROOT = Path(__file__).resolve().parents[2]
 DECISION = {"event_type": "DECISION_MADE", "decision": "VALID_BUT_UNUSUAL", "reason_code": "GENUINE_HIGH_OR_LOW_VALUE", "verification_source": "PHONE_CALL"}
@@ -62,9 +62,8 @@ def test_review_only_refuses_every_batch_start_on_the_server(project):
 
 def test_review_only_refuses_batch_even_for_an_authenticated_admin(project):
     root, _ = project
-    users = json.dumps({"users": [{"name": "Admin", "role": "admin", "token_sha256": hashlib.sha256(b"t-admin").hexdigest()}]})
-    client = _client(root, review_only=True, users_json=users)
-    response = client.post("/api/batch", json={"release": "2024", "label": "x1"}, headers={"Authorization": "Bearer t-admin"})
+    client = _client(root, review_only=True, **signed_in())
+    response = client.post("/api/batch", json={"release": "2024", "label": "x1"}, headers=auth("admin"))
     assert response.status_code == 403 and response.json()["review_only"] is True
 
 
@@ -77,11 +76,23 @@ def test_review_pages_still_work_in_review_only_mode(project):
     assert client.get("/api/reviews").json()["total"] == 1
 
 
+def test_case_areas_counts_every_record_once_and_changes_nothing(project):
+    root, run = project
+    client = _client(root, review_only=True, audit_read_only=True)
+    data = client.get("/api/case-areas").json()
+    assert data["available"] and data["method"] == "lanes"
+    assert sum(r["records"] for r in data["rows"]) == 2 and {r["area_label"] for r in data["rows"]} == {"Delhi"}
+    assert all(r["band"] == "CHECK_NOW" and r["lanes"] == ["VALUE"] and r["decided"] == 0 for r in data["rows"])
+    assert [r["check_now"] for r in data["rounds"]] == [2]
+    assert client.get("/api/case-areas", params={"state": "07"}).json()["available"] is False     # no district codes in this run
+    assert not (run / "review_audit.sqlite").exists() or client.get("/api/reviews").json()["total"] == 0
+
+
 def test_batch_routes_stay_available_when_review_only_is_off(project):
     root, _ = project
     client = _client(root)
-    assert client.get("/api/deployment").json() == {"review_only": False, "batch_reason": None, "audit_writable": True, "audit_reason": None, "data_notice": None,
-                                                     "audit_backend": "sqlite", "uploads": False}
+    assert client.get("/api/deployment").json() == {"review_only": False, "batch_reason": None, "audit_writable": True, "exports": True, "audit_reason": None, "data_notice": None,
+                                                     "audit_backend": "sqlite", "notes_shown": True, "uploads": False}
     response = client.post("/api/batch", json={"release": "2024", "label": "x1"})
     assert response.status_code == 400 and "not a supported input" in response.json()["detail"]    # reaches the job manager
 
@@ -103,6 +114,123 @@ def test_audit_read_only_refuses_writes_and_keeps_history_readable(project):
     assert (run / "review_audit.sqlite").read_bytes() == before            # not one byte appended
     health = client.get("/healthz").json()
     assert health["audit_store"] == "read-only" and health["audit_store_writable"] is False and health["review_only"] is True
+
+
+def test_hosted_store_records_decisions_only_through_its_own_writer_connection():
+    from mospi.db.audit import PostgresAuditStore
+
+    class Connections:
+        def __init__(self): self.used = 0
+        def transaction(self): self.used += 1; raise RuntimeError("stop before any SQL")
+
+    reader, writer = Connections(), Connections()
+    read_only = PostgresAuditStore(reader, hosted=True)
+    assert not read_only.writable
+    with pytest.raises(PermissionError, match="reads the audit trail only"):
+        read_only.append("run", case_id="c", event_type="DECISION_MADE", actor="a", **{k: v for k, v in DECISION.items() if k != "event_type"})
+    recording = PostgresAuditStore(reader, hosted=True, writer=writer)
+    assert recording.writable and recording.hosted
+    with pytest.raises(RuntimeError):                                    # reaches the writer's transaction ...
+        recording.append("run", case_id="c", event_type="DECISION_MADE", actor="a", **{k: v for k, v in DECISION.items() if k != "event_type"})
+    assert (writer.used, reader.used) == (1, 0)                          # ... and never touches the reader connection
+    with pytest.raises(PermissionError, match="decisions only"):         # operations trail and chain registration stay off-limits
+        recording.append_operation("RUN_PUBLISHED", subject="x", actor="a")
+    with pytest.raises(PermissionError, match="decisions only"):
+        recording.register_run("run")
+    with pytest.raises(PermissionError, match="decisions only"):         # nor any other event type, such as an export entry
+        recording.append("run", case_id="*", event_type="EXPORT", actor="a")
+    assert writer.used == 1
+
+
+class HostedStore:
+    """The hosted flags, as the Postgres store reports them, over the SQLite chain (``fail`` makes every append raise)."""
+    backend, hosted = "postgres", True
+
+    def __init__(self, writable: bool = True, fail: Exception | None = None):
+        from mospi.db.audit import SqliteAuditStore
+        self._store, self.writable, self.fail = SqliteAuditStore(), writable, fail
+
+    def append(self, run, **fields):
+        if self.fail is not None:
+            raise self.fail
+        return self._store.append(run, **fields)
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+
+def _hosted(root, store) -> TestClient:
+    return _client(root, review_only=True, audit_read_only=not store.writable, audit_store=store, allow_export=False, require_authentication=True,
+                   hosted=True, **signed_in())
+
+
+def test_hosted_instance_with_a_writer_takes_decisions_from_signed_in_deciders_only(project):
+    root, run = project
+    client = _hosted(root, HostedStore())
+    deployment = client.get("/api/deployment", headers=auth("supervisor")).json()
+    assert deployment["audit_writable"] is True and deployment["exports"] is False and deployment["notes_shown"] is False
+    assert client.post("/api/cases/case_1/events", json=DECISION, headers={"X-MoSPI-Request": "1"}).status_code == 401                       # no sign-in, no record
+    refused = client.post("/api/cases/case_1/events", json={**DECISION, "actor": "typed name"}, headers=auth("analyst"))
+    assert refused.status_code == 403 and "cannot record" in refused.json()["detail"]
+    assert client.post("/api/cases/case_1/events", json={"event_type": "CASE_VIEWED"}, headers=auth("analyst")).status_code == 403
+    saved = client.post("/api/cases/case_1/events", json={**DECISION, "actor": "typed name", "expected_last_decision_id": None}, headers=auth("supervisor"))
+    assert saved.status_code == 200 and saved.json()["actor"] == "Test supervisor" and saved.json()["actor_role"] == "supervisor"
+    stale = client.post("/api/cases/case_1/events", json={**DECISION, "expected_last_decision_id": None}, headers=auth("admin"))
+    assert stale.status_code == 409 and "Another reviewer" in stale.json()["detail"]
+    for role in ("admin", "supervisor"):                                                                       # exports stay refused
+        export = client.get("/api/export/queue", headers=auth(role))
+        assert export.status_code == 503 and "processing machine" in export.json()["detail"]
+    assert [e["actor"] for e in client.get("/api/reviews", headers=auth("analyst")).json()["rows"]] == ["Test supervisor"]
+    assert verify_chain(run / "review_audit.sqlite")["status"] == "INTACT"
+
+
+def test_hosted_instance_without_a_writer_refuses_decisions_plainly(project):
+    root, run = project
+    client = _hosted(root, HostedStore(writable=False))
+    assert client.get("/api/deployment", headers=auth("supervisor")).json()["audit_writable"] is False
+    for body in (DECISION, {"event_type": "CASE_VIEWED"}):
+        response = client.post("/api/cases/case_1/events", json=body, headers=auth("supervisor"))
+        assert response.status_code == 503 and response.json()["detail"].startswith("Decisions are recorded on the processing machine")
+    assert not (run / "review_audit.sqlite").exists()
+
+
+@pytest.mark.parametrize("failure", ["grant", "unavailable"])
+def test_hosted_database_failure_on_a_decision_is_plain_and_leaks_nothing(project, failure):
+    from mospi.db.connection import DatabaseUnavailable
+    root, _ = project
+    error = (RuntimeError("permission denied for table audit_events (host db.example.supabase.co, password=hunter2)") if failure == "grant"
+             else DatabaseUnavailable("PostgreSQL is not reachable: connection to server at db.example.supabase.co failed"))
+    client = _hosted(root, HostedStore(fail=error))
+    response = client.post("/api/cases/case_1/events", json=DECISION, headers=auth("supervisor"))
+    assert response.status_code == 503 and response.json()["detail"].startswith("Your decision could not be saved just now, and nothing was recorded.")
+    assert "supabase" not in response.text and "hunter2" not in response.text and "audit_events" not in response.text
+
+
+def test_hosted_refusal_from_the_audit_store_reaches_the_reviewer_in_plain_words(project):
+    root, _ = project
+    refusal = PermissionError("Decisions for this run can be recorded only on the processing machine until its earlier review history is sealed there.")
+    response = _hosted(root, HostedStore(fail=refusal)).post("/api/cases/case_1/events", json=DECISION, headers=auth("supervisor"))
+    assert response.status_code == 503 and "processing machine" in response.json()["detail"]
+
+
+def test_a_refused_database_login_is_not_retried(monkeypatch):
+    """Repeated failed logins get the client banned by the Supabase pooler, so one refusal stops further attempts."""
+    import psycopg
+    from mospi.db.connection import Database, DatabaseUnavailable
+    attempts = []
+
+    def connect(*_, **__):
+        attempts.append(1)
+        raise psycopg.OperationalError('connection failed: FATAL:  password authentication failed for user "mospi_reviewer"')
+
+    monkeypatch.setattr(psycopg, "connect", connect)
+    monkeypatch.delenv("MOSPI_DB_CA_FILE", raising=False)
+    db = Database("postgresql://mospi_reviewer:secret-password@db.invalid:6543/postgres", schema="mospi")
+    for _ in range(3):
+        with pytest.raises(DatabaseUnavailable) as error:
+            db.fetch("SELECT 1")
+        assert "secret-password" not in str(error.value)
+    assert len(attempts) == 1 and db.login_refused
 
 
 # ------------------------------------------------------------------ persistence and concurrency (local audit store)
@@ -187,39 +315,43 @@ def test_hosted_mode_serves_no_data_until_users_are_configured(project):
         assert client.get(path).status_code == 503, path
 
 
-def test_environment_users_protect_every_api_route(project):
+def test_sign_in_protects_every_api_route(project):
     root, _ = project
-    token = "test-token-not-a-secret"
-    users = json.dumps({"users": [{"name": "Reviewer One", "role": "technical", "token_sha256": hashlib.sha256(token.encode()).hexdigest()}]})
-    client = _client(root, review_only=True, audit_read_only=True, require_authentication=True, users_json=users)
-    paths = ["/api/runs", "/api/overview", "/api/cases", "/api/cases/case_0", "/api/worklist", "/api/reviews", "/api/groups", "/api/aggregates",
+    client = _client(root, review_only=True, audit_read_only=True, require_authentication=True, **signed_in())
+    paths = ["/api/runs", "/api/overview", "/api/cases", "/api/cases/case_0", "/api/worklist", "/api/reviews", "/api/groups", "/api/aggregates", "/api/case-areas",
              "/api/feedback", "/api/audit/verify", "/api/export/queue", "/api/evaluation", "/api/integrity", "/api/summary", "/api/deployment", "/api/batch",
-             "/api/operations", "/api/ingest/contracts", "/api/datasets", "/api/jobs", "/api/notifications"]
+             "/api/operations", "/api/ingest/contracts", "/api/datasets", "/api/jobs", "/api/notifications", "/api/users"]
+    forged = {"Cookie": "mospi_session=1.1.9999999999.forged-signature"}
     for path in paths:
         assert client.get(path).status_code == 401, path
-        assert client.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 401, path
-    assert client.post("/api/cases/case_0/events", json=DECISION).status_code == 401
-    for path in ("/api/datasets", "/api/checks", "/api/datasets/" + "0" * 32 + "/confirm", "/api/jobs/" + "0" * 32 + "/retry"):
-        assert client.post(path, json={}).status_code == 401, path
-    assert client.put("/api/datasets/" + "0" * 32 + "/files", params={"name": "a.csv"}, content=b"a").status_code == 401
-    signed_in = {"Authorization": f"Bearer {token}"}
-    assert client.get("/api/session", headers=signed_in).json()["user"] == {"name": "Reviewer One", "role": "technical"}
-    assert client.get("/api/cases", headers=signed_in).status_code == 200
+        assert client.get(path, headers=forged).status_code == 401, path
+        assert client.get(path, headers={"Authorization": "Bearer anything"}).status_code == 401, path      # bearer tokens are gone
+    assert client.post("/api/cases/case_0/events", json=DECISION, headers={"X-MoSPI-Request": "1"}).status_code == 401
+    for path in ("/api/datasets", "/api/checks", "/api/datasets/" + "0" * 32 + "/confirm", "/api/jobs/" + "0" * 32 + "/retry", "/api/users",
+                 "/api/users/1/password", "/api/auth/password"):
+        assert client.post(path, json={}, headers={"X-MoSPI-Request": "1"}).status_code == 401, path
+    assert client.put("/api/datasets/" + "0" * 32 + "/files", params={"name": "a.csv"}, content=b"a", headers={"X-MoSPI-Request": "1"}).status_code == 401
+    assert client.patch("/api/users/2", json={"active": False}, headers={"X-MoSPI-Request": "1"}).status_code == 401
+    session = client.get("/api/session", headers=auth("analyst")).json()
+    assert session["user"]["name"] == "Test analyst" and session["user"]["role"] == "analyst" and "decide" not in session["capabilities"]
+    assert client.get("/api/cases", headers=auth("analyst")).status_code == 200
     # The HTML shell and static assets carry no data and stay public; /healthz reports readiness only.
     assert client.get("/").status_code == 200 and client.get("/assets/app.js").status_code == 200
 
 
 def test_every_api_route_is_covered_by_the_access_test():
     """A new /api route must be added to the access test above (or to this allowlist with a reason)."""
-    api = "".join((ROOT / "mospi" / "app" / name).read_text(encoding="utf-8") for name in ("api.py", "operations_api.py"))
+    api = "".join((ROOT / "mospi" / "app" / name).read_text(encoding="utf-8") for name in ("api.py", "operations_api.py", "auth_api.py"))
     routes = set(re.findall(r'@app\.(?:get|post|put|delete|patch)\("(/api/[^"{]*)', api))
-    tested = {"/api/runs", "/api/overview", "/api/cases", "/api/cases/", "/api/worklist", "/api/reviews", "/api/groups", "/api/groups/", "/api/aggregates",
+    tested = {"/api/runs", "/api/overview", "/api/cases", "/api/cases/", "/api/worklist", "/api/reviews", "/api/groups", "/api/groups/", "/api/aggregates", "/api/case-areas",
               "/api/feedback", "/api/audit/verify", "/api/export/queue", "/api/evaluation", "/api/integrity", "/api/summary", "/api/deployment", "/api/batch",
               "/api/batch/", "/api/batch/inputs", "/api/session", "/api/queue/position", "/api/labels", "/api/patterns", "/api/version", "/api/validate/record",
               # Upload & validate, jobs, checks, alerts: role matrix in tests/postgres/test_upload_and_validate.py and the sign-in test below.
               "/api/operations", "/api/ingest/contracts", "/api/datasets", "/api/datasets/", "/api/jobs", "/api/jobs/", "/api/checks", "/api/notifications",
-              "/api/notifications/"}
-    public = {"/api/session/required"}   # says only whether sign-in is needed
+              "/api/notifications/",
+              # Accounts: tests/app/test_auth.py.
+              "/api/auth/password", "/api/users", "/api/users/"}
+    public = {"/api/session/required", "/api/auth/login", "/api/auth/logout"}   # say whether sign-in is needed, perform it, end it
     assert routes - tested - public == set()
 
 
@@ -227,7 +359,7 @@ def test_every_api_route_is_covered_by_the_access_test():
 
 
 def _vercel_app(monkeypatch, data: Path, **env):
-    for name in ("MOSPI_USERS_JSON", "MOSPI_ALLOW_ANONYMOUS_DEMO"):
+    for name in ("MOSPI_SESSION_SECRET", "MOSPI_ALLOW_ANONYMOUS_DEMO"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("MOSPI_DATA_DIR", str(data))
     for name, value in env.items():
@@ -239,8 +371,7 @@ def _vercel_app(monkeypatch, data: Path, **env):
 def test_vercel_entrypoint_is_review_only_read_only_and_requires_sign_in(project, monkeypatch):
     root, _ = project
     client = _vercel_app(monkeypatch, root)
-    assert client.get("/api/runs").status_code == 503                         # no users configured
-    assert _vercel_app(monkeypatch, root, MOSPI_USERS_JSON="not json").get("/api/runs").status_code == 503
+    assert client.get("/api/runs").status_code == 503                         # no database, so no accounts: nothing is served
     anonymous = _vercel_app(monkeypatch, root, MOSPI_ALLOW_ANONYMOUS_DEMO="1")
     assert anonymous.get("/api/runs").status_code == 503                      # refused: this data is not marked synthetic
 
@@ -262,16 +393,14 @@ def test_vercel_entrypoint_serves_the_committed_synthetic_demo(tmp_path, monkeyp
 
 
 def test_vercel_entrypoint_without_a_database_refuses_data_plainly_and_never_falls_back(tmp_path, monkeypatch):
-    users = json.dumps({"users": [{"name": "S", "role": "supervisor", "token_sha256": hashlib.sha256(b"tok").hexdigest()}]})
     for backend in ("postgres", "gateway"):            # postgres without a URL; a removed backend name
         monkeypatch.delenv("MOSPI_DATABASE_URL", raising=False)
-        client = _vercel_app(monkeypatch, ROOT / "data" / "demo", MOSPI_AUDIT_BACKEND=backend, MOSPI_USERS_JSON=users,
+        client = _vercel_app(monkeypatch, ROOT / "data" / "demo", MOSPI_AUDIT_BACKEND=backend, MOSPI_SESSION_SECRET="s" * 40,
                              MOSPI_SERVING_DIR=str(tmp_path / backend))
-        response = client.get("/api/overview", headers={"Authorization": "Bearer tok"})
-        assert response.status_code == 503 and response.json()["database_unavailable"] is True, backend
-        assert client.get("/api/overview").status_code == 401                        # sign-in is still checked first
+        for path in ("/api/overview", "/api/session", "/api/runs"):
+            assert client.get(path).status_code == 503, (backend, path)       # no account store: nothing is served, nothing falls back
+        assert client.post("/api/auth/login", json={"username": "a", "password": "b"}, headers={"X-MoSPI-Request": "1"}).status_code == 503
         assert client.get("/healthz").status_code == 503
-        assert client.get("/api/session", headers={"Authorization": "Bearer tok"}).status_code == 200
     monkeypatch.delenv("MOSPI_AUDIT_BACKEND")
 
 

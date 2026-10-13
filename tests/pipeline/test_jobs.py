@@ -1,7 +1,6 @@
 """Batch validation started from the workspace (W8.7): a real pipeline run in its own process, on a synthetic delivery."""
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 
@@ -95,15 +94,13 @@ def test_a_vanished_process_is_reported_as_interrupted(workspace):
     assert client.get("/api/batch/not-a-job").status_code == 404
 
 
-def test_only_an_administrator_can_start_a_batch(workspace, tmp_path):
+def test_only_an_administrator_can_start_a_batch(workspace):
+    from tests.auth_support import auth, signed_in
     root, datasets, _ = workspace
-    users = tmp_path / "users.json"
-    users.write_text(json.dumps({"users": [{"name": "S", "role": "supervisor", "token_sha256": hashlib.sha256(b"sup").hexdigest()},
-                                           {"name": "A", "role": "admin", "token_sha256": hashlib.sha256(b"adm").hexdigest()}]}), encoding="utf-8")
-    client = TestClient(create_app(root / "fusion" / "runs", project_root=root, users_file=users, batch_datasets=datasets))
-    assert client.post("/api/batch", json={"release": "2024", "label": "y"}).status_code == 401
-    refused = client.post("/api/batch", json={"release": "2024", "label": "y"}, headers={"Authorization": "Bearer sup"})
+    client = TestClient(create_app(root / "fusion" / "runs", project_root=root, batch_datasets=datasets, **signed_in()))
+    assert client.post("/api/batch", json={"release": "2024", "label": "y"}, headers={"X-MoSPI-Request": "1"}).status_code == 401
+    refused = client.post("/api/batch", json={"release": "2024", "label": "y"}, headers=auth("supervisor"))
     assert refused.status_code == 403
-    assert client.get("/api/batch/inputs", headers={"Authorization": "Bearer sup"}).json()["can_start"] is False
+    assert client.get("/api/batch/inputs", headers=auth("supervisor")).json()["can_start"] is False
     # The administrator passes the role check (and is then refused for the invalid label, before anything runs).
-    assert client.post("/api/batch", json={"release": "2024", "label": "Bad!"}, headers={"Authorization": "Bearer adm"}).status_code == 400
+    assert client.post("/api/batch", json={"release": "2024", "label": "Bad!"}, headers=auth("admin")).status_code == 400

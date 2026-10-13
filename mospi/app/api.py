@@ -1,10 +1,10 @@
 """Local FastAPI surface for the MoSPI survey data validation review workspace.
 
 Security boundary (see docs/stages/fusion/README.md): the service binds to 127.0.0.1 by
-default and sends nothing to external services.  Optional token
-authentication (``--users-file``) assigns each request a named user and role;
-when it is enabled the audit trail records that authenticated name instead of
-a typed one.  It is not a substitute for the GoI-approved identity, network
+default and sends nothing to external services.  Sign-in with named accounts
+(``users``: mospi/auth, routes in auth_api.py) assigns each request a user and
+one of three roles (admin, supervisor, analyst); the audit trail records that
+signed-in name.  It is not a substitute for the GoI-approved identity, network
 and hosting controls required before deployment.
 
 Deployment modes (docs/deployment/VERCEL_REVIEW_ONLY_DEPLOYMENT.md):
@@ -14,14 +14,14 @@ Deployment modes (docs/deployment/VERCEL_REVIEW_ONLY_DEPLOYMENT.md):
   and audit history are read, but nothing is appended (decisions, case-opened events
   and the logged CSV export are refused with an explicit reason instead of being
   written to temporary storage).
-* ``require_authentication`` - every /api request is refused until users are
-  configured (a users file or the ``MOSPI_USERS_JSON`` environment variable).
+* ``require_authentication`` - every /api request is refused until an account
+  store is configured.  Without a store and without this flag the API is open
+  (tests and the synthetic anonymous demo only; the servers always pass a store).
 """
 
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 import json
 import os
@@ -45,7 +45,13 @@ from mospi.pipeline.stages.fusion.story import build_lane_story
 from mospi.db.audit import SqliteAuditStore
 from mospi.db.connection import DatabaseUnavailable
 from mospi.paths import data_root
+from mospi.survey_rules.plfs import period_label
 from mospi.pipeline.jobs import JobError, JobManager
+from mospi.auth import UserStore, can
+from mospi.auth.sessions import SessionSigner, signer_from_env
+
+from .auth_api import NOT_CONFIGURED, PASSWORD_CHANGE_REQUIRED, PASSWORD_ROUTES, PUBLIC_ROUTES, Authenticator, resolve_user, session_payload
+from .auth_api import register as register_auth
 
 CODE_VERSION = os.environ.get("MOSPI_CODE_VERSION", "").strip() or None
 
@@ -63,19 +69,26 @@ SUMMARY_FIELDS = ["target_variable", "percentile_position", "peer_group_size", "
                   "contextual_status", "provenance_json"]
 ALLOWED_FILTERS = {"priority_band", "state", "sector", "stratum", "fsu", "release", "visit", "month", "tier", "case_level", "district", "household_key"}
 LANE_CODES = {"RULE", "RULE_SOFT", "VALUE", "CODING"}
-ROLES_THAT_EXPORT = {"supervisor", "admin"}
 REVIEW_FILTERS = {"UNREVIEWED", "REVIEWED", *L.DECISIONS}
-ROLES_THAT_DECIDE = {"supervisor", "admin"}
-ROLES_THAT_RUN_BATCH = {"admin"}
+# Requests that change state must carry this header: a page on another site cannot add it without a CORS preflight,
+# which this API never grants (cross-site request forgery).
+REQUEST_HEADER = "x-mospi-request"
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 REVIEW_ONLY_REASON = ("This instance is review-only. Validation batches are run separately on the processing machine and published "
                       "here as finished runs; they cannot be started from this instance.")
 AUDIT_READ_ONLY_REASON = ("This instance has no durable audit store, so decisions cannot be recorded here, and CSV exports (which are "
                           "logged in the audit trail) are not offered. Recorded decisions and audit history are shown read-only.")
-NO_USERS_REASON = "Sign-in is required on this deployment, but no users are configured (MOSPI_USERS_JSON). No data is served until they are."
+HOSTED_READ_ONLY_REASON = ("Decisions are recorded on the processing machine; recorded decisions and audit history are shown here "
+                           "read-only.")
+EXPORT_REASON = "CSV export is not offered on this instance; it is available on the processing machine."
+DECISION_NOT_SAVED_REASON = ("Your decision could not be saved just now, and nothing was recorded. Please try again in a minute; "
+                             "if it keeps happening, tell the administrator.")
+NO_USERS_REASON = "Sign-in is required on this deployment, but no account store is configured. No data is served until it is."
 DATABASE_DOWN_REASON = ("The review database cannot be reached just now, so this page cannot be shown and nothing was changed. "
                         "Please try again in a minute; if it keeps happening, tell the administrator.")
 # Routes that describe the instance itself and need no review data.
-NO_DATA_ROUTES = {"/api/session", "/api/session/required", "/api/deployment", "/api/labels", "/api/version"}
+NO_DATA_ROUTES = {"/api/session", "/api/session/required", "/api/deployment", "/api/labels", "/api/version", "/api/auth/login", "/api/auth/logout",
+                  "/api/auth/password", "/api/users"}
 LOG = logging.getLogger("MoSPI.api")
 
 
@@ -176,43 +189,35 @@ class FusionRepository:
         return rows, int(total)
 
 
-def _load_users(path: Path | None, text: str | None = None) -> dict[str, dict[str, str]]:
-    """``{"users": [{"name": ..., "role": "supervisor|technical|admin", "token_sha256": ...}]}``; tokens are never stored in clear.
-
-    Read from a file, or from the same JSON document in ``text`` (the ``MOSPI_USERS_JSON`` environment variable)."""
-    if path is None and not (text or "").strip():
-        return {}
-    document = json.loads(Path(path).read_text(encoding="utf-8") if path is not None else text)
-    users = {}
-    for user in document.get("users", []):
-        if user.get("role") not in {"supervisor", "technical", "admin"} or len(str(user.get("token_sha256", ""))) != 64:
-            raise ValueError("Each user needs a role (supervisor/technical/admin) and a 64-character token_sha256.")
-        users[user["token_sha256"].lower()] = {"name": user["name"], "role": user["role"]}
-    return users
-
-
 def env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def create_app(fusion_root: Path | None = None, project_root: Path | None = None, users_file: Path | None = None,
-               batch_datasets: dict[str, dict[str, Any]] | None = None, *, users_json: str | None = None, review_only: bool = False,
+def create_app(fusion_root: Path | None = None, project_root: Path | None = None, batch_datasets: dict[str, dict[str, Any]] | None = None, *,
+               users: UserStore | None = None, session_signer: SessionSigner | None = None, review_only: bool = False,
                audit_read_only: bool = False, require_authentication: bool = False, audit_store: Any = None, operations: Any = None,
                before_data: Callable[[], None] | None = None, health_check: Callable[[], tuple[dict[str, Any], int]] | None = None,
-               hosted: bool = False) -> FastAPI:
-    """``before_data`` runs after authentication and before any data route (the hosted instance fetches its review data
-    from the database there, so an unauthenticated request never causes a download); ``health_check`` replaces the
-    file-based /healthz; ``hosted`` keeps database error details out of responses (they are logged instead)."""
+               hosted: bool = False, allow_export: bool | None = None) -> FastAPI:
+    """``users`` is the account store (mospi/auth); with it every /api request but sign-in needs a session cookie signed by
+    ``session_signer`` (default: from ``MOSPI_SESSION_SECRET``; required when ``hosted``).  ``before_data`` runs after
+    authentication and before any data route (the hosted instance fetches its review data from the database there, so an
+    unauthenticated request never causes a download); ``health_check`` replaces the file-based /healthz; ``hosted`` keeps
+    database error details out of responses (they are logged instead); ``allow_export`` (default: whenever decisions can be
+    recorded) offers the logged CSV export."""
     app = FastAPI(title="MoSPI Survey Data Validation", docs_url=None, redoc_url=None, openapi_url=None)
     fusion_root = Path(fusion_root) if fusion_root is not None else data_root() / "fusion" / "runs"
     audit = audit_store or SqliteAuditStore()
     if not audit.writable:
         audit_read_only = True
+    exports = (not audit_read_only) if allow_export is None else (allow_export and not audit_read_only)
+    read_only_reason = HOSTED_READ_ONLY_REASON if hosted else AUDIT_READ_ONLY_REASON
     repository = FusionRepository(fusion_root, audit, operations.hidden_runs if operations is not None else None)
     root = Path(project_root) if project_root else Path(fusion_root).resolve().parent.parent
     # Source runs live beside fusion/ in the project root (<root>/fusion/runs).
     resolver = SourceResolver(root)
-    users = _load_users(users_file, users_json)
+    auth = None
+    if users is not None:
+        auth = Authenticator(users, session_signer if session_signer is not None else signer_from_env(required=hosted), hosted=hosted)
     # In review-only mode no job manager exists, so no code path can start or list a batch.
     jobs = None if review_only else JobManager(root, batch_datasets)
     manifest_path = root / "SERVING_DATA_MANIFEST.json"
@@ -237,22 +242,30 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
     @app.middleware("http")
     async def security(request: Request, call_next):
         user = None
-        is_api = request.url.path.startswith("/api/") and request.url.path != "/api/session/required"
-        if is_api and require_authentication and not users:
+        path = request.url.path
+        is_api = path.startswith("/api/") and path != "/api/session/required"
+        if is_api and require_authentication and auth is None:
             return JSONResponse({"detail": NO_USERS_REASON}, status_code=503)
-        if users and is_api:
-            header = request.headers.get("authorization", "")
-            token = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
-            user = users.get(hashlib.sha256(token.encode("utf-8")).hexdigest()) if token else None
-            if user is None:
+        if auth is not None and is_api:
+            if request.method not in SAFE_METHODS and request.headers.get(REQUEST_HEADER) != "1":
+                return JSONResponse({"detail": "This request was refused: it did not come from the workspace."}, status_code=403)
+            if auth.signer is None:
+                return JSONResponse({"detail": NOT_CONFIGURED}, status_code=503)
+            try:
+                user = await resolve_user(auth, request)
+            except DatabaseUnavailable as error:
+                return database_down(error)
+            if user is None and path not in PUBLIC_ROUTES and path != "/api/auth/logout":
                 return JSONResponse({"detail": "Authentication required."}, status_code=401)
-            if request.method == "POST" and request.url.path.endswith("/events") and user["role"] not in ROLES_THAT_DECIDE:
+            if user is not None and user["must_change_password"] and path not in PUBLIC_ROUTES | PASSWORD_ROUTES:
+                return JSONResponse({"detail": PASSWORD_CHANGE_REQUIRED, "password_change_required": True}, status_code=403)
+            if request.method == "POST" and path.endswith("/events") and not can(user, "decide"):
                 return JSONResponse({"detail": "Your role cannot record review decisions."}, status_code=403)
-            if request.method == "POST" and request.url.path == "/api/batch" and user["role"] not in ROLES_THAT_RUN_BATCH:
+            if request.method == "POST" and path == "/api/batch" and not can(user, "run"):
                 return JSONResponse({"detail": "Only an administrator can start a batch validation."}, status_code=403)
-        if review_only and request.url.path.startswith("/api/batch") and request.method not in ("GET", "HEAD"):
+        if review_only and path.startswith("/api/batch") and request.method not in ("GET", "HEAD"):
             return JSONResponse({"detail": REVIEW_ONLY_REASON, "review_only": True}, status_code=403)
-        if before_data is not None and is_api and request.url.path not in NO_DATA_ROUTES:
+        if before_data is not None and is_api and path not in NO_DATA_ROUTES and not path.startswith("/api/users/"):
             try:
                 await run_in_threadpool(before_data)
             except DatabaseUnavailable as error:
@@ -280,19 +293,21 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
 
     @app.get("/api/session/required")
     def session_required() -> dict[str, Any]:
-        return {"authentication": bool(users)}
+        return {"authentication": auth is not None or require_authentication}
 
     @app.get("/api/session")
     def session(request: Request) -> dict[str, Any]:
-        user = getattr(request.state, "user", None)
-        return {"authentication": bool(users), "user": user}
+        return session_payload(auth, getattr(request.state, "user", None))
+
+    register_auth(app, auth)
 
     @app.get("/api/deployment")
     def deployment() -> dict[str, Any]:
         """What this instance allows, so the UI can say so plainly (the server enforces it either way)."""
         return {"review_only": review_only, "batch_reason": REVIEW_ONLY_REASON if review_only else None,
-                "audit_writable": not audit_read_only, "audit_reason": AUDIT_READ_ONLY_REASON if audit_read_only else None,
+                "audit_writable": not audit_read_only, "exports": exports, "audit_reason": read_only_reason if audit_read_only else None,
                 "data_notice": data_notice, "audit_backend": audit.backend,
+                "notes_shown": not getattr(audit, "hosted", False),   # the hosted views leave out reviewers' notes
                 "uploads": operations is not None and not getattr(operations, "hosted", True) and not review_only}
 
     @app.get("/api/runs")
@@ -450,7 +465,7 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
     @app.post("/api/cases/{case_id}/events")
     def record_event(case_id: str, payload: dict[str, Any], request: Request, run: str | None = None) -> dict[str, Any]:
         if audit_read_only:
-            raise HTTPException(503, AUDIT_READ_ONLY_REASON)
+            raise HTTPException(503, read_only_reason)
         directory = repository.path(run)
         evidence = repository.query(directory / "fused_cases.parquet", "SELECT * FROM read_parquet(?) WHERE case_id=?", [case_id])
         if not evidence:
@@ -459,6 +474,8 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
         if event_type not in {"CASE_VIEWED", "DECISION_MADE"}:
             raise HTTPException(422, "Unknown event type.")
         user = getattr(request.state, "user", None)
+        if user is None and (require_authentication or hosted):   # the middleware already refuses this; never fall back to a typed name
+            raise HTTPException(401, "Authentication required.")
         # Without sign-in the typed name is recorded but marked as unverified (plan N10).
         actor = user["name"] if user else str(payload.get("actor") or "local-supervisor")[:120]
         snapshot = build_evidence_card(pd.Series(evidence[0]))
@@ -476,6 +493,13 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
             raise HTTPException(409, str(error)) from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+        except PermissionError as error:      # the audit store's own refusals are written for the reviewer
+            raise HTTPException(503, str(error)) from error
+        except Exception as error:            # noqa: BLE001 - unreachable database or a refused grant: plain reason here, detail in the log
+            if not hosted:
+                raise
+            LOG.error("Decision not saved: %s: %s", type(error).__name__, error)
+            raise HTTPException(503, DECISION_NOT_SAVED_REASON) from None
 
     @app.get("/api/reviews")
     def reviews(run: str | None = None, decision: str | None = None) -> dict[str, Any]:
@@ -591,6 +615,57 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
         return {"available": True, "rows": rows, "notable": notable, "indicators": indicators, "limitations": report.get("limitations", []),
                 "periods": report.get("periods_in_pool", []), "design_period": repository.metadata(directory).get("design_period")}
 
+    @app.get("/api/case-areas")
+    def case_areas(run: str | None = None, state: str | None = None) -> dict[str, Any]:
+        """Read-only counts for the Area trends page: records and cases by area, sector, interview period, list and reasons.
+
+        One row per State/UT (or district of ``state``) x sector x period x list x stored reason set, so every record is
+        counted exactly once; ``decided`` counts the cases of that row that have a decision.  Other current-method rounds
+        of the same observation are summarised for comparison.  Nothing here changes a list, a case or a decision."""
+        directory = repository.path(run)
+        parquet = directory / "fused_cases.parquet"
+        available = _columns(parquet)
+        metadata = repository.metadata(directory)
+        area = "district" if state else "state"
+        if area not in available:
+            return {"available": False, "rows": [], "reason": "This run has no district codes." if state else "This run has no State/UT codes."}
+        period = "period_index" if "period_index" in available else "NULL"
+        reasons = "COALESCE(lanes, '')" if "lanes" in available else "''"
+        decided = list(audit.latest_statuses(directory)) or ["__none__"]
+        rows = repository.query(parquet, f"SELECT {area} AS area, sector, {period} AS period_index, priority_band AS band, {reasons} AS lanes, "
+                                         "COUNT(*) AS records, COUNT(*) FILTER (WHERE case_id IN (SELECT UNNEST($2))) AS decided "
+                                         f"FROM read_parquet($1){' WHERE state = $3' if state else ''} GROUP BY ALL",
+                                [decided, *([state] if state else [])])
+        design = str(metadata.get("design_period") or "")
+        out = [{"area": L.clean(r["area"]), "area_label": (f"District {L.clean(r['area'])}" if state else L.state_name(r["area"])),
+                "sector": L.clean(r["sector"]), "period_index": None if pd.isna(r["period_index"]) else int(r["period_index"]),
+                "band": r["band"], "lanes": [x for x in str(r["lanes"]).split(",") if x], "records": int(r["records"]), "decided": int(r["decided"])}
+               for r in rows]
+        periods = sorted({r["period_index"] for r in out if r["period_index"] is not None})
+        result = {"available": True, "run": directory.name, "level": area, "state": state, "rows": out,
+                  "periods": [{"index": p, "label": period_label(design, p)} for p in periods],
+                  "budget": json.loads((directory / "fusion_report.json").read_text(encoding="utf-8")).get("queue", {}),
+                  "method": "lanes" if "tier" in available else "superseded_v2_0"}
+        if not state:
+            rounds = []
+            for item in repository.runs():
+                if "lanes" not in str(item.get("fusion_version", "")) or item.get("observation") != metadata.get("observation"):
+                    continue
+                other = repository.root / item["directory"]
+                counts = repository.query(other / "fused_cases.parquet",
+                                          "SELECT COUNT(*) AS records, COUNT(*) FILTER (WHERE priority_band = 'CHECK_NOW') AS check_now, "
+                                          "COUNT(*) FILTER (WHERE priority_band = 'CHECK_IF_TIME') AS check_if_time, "
+                                          "COUNT(*) FILTER (WHERE priority_band = 'NOT_ASSESSABLE') AS not_assessable FROM read_parquet(?)")[0]
+                covered = [r["p"] for r in repository.query(other / "fused_cases.parquet", "SELECT DISTINCT period_index AS p FROM read_parquet(?) "
+                                                            "WHERE period_index IS NOT NULL ORDER BY 1")] if "period_index" in _columns(other / "fused_cases.parquet") else []
+                queue = json.loads((other / "fusion_report.json").read_text(encoding="utf-8")).get("queue", {})
+                rounds.append({"run": item["directory"], "release": item.get("release"), "fusion_version": item.get("fusion_version"),
+                               **{k: int(v or 0) for k, v in counts.items()}, "budget_cases": queue.get("budget_cases"),
+                               "review_budget_share": queue.get("review_budget_share"),
+                               "periods": [period_label(str(item.get("design_period") or ""), int(p)) for p in covered]})
+            result["rounds"] = sorted(rounds, key=lambda r: str(r["release"]))
+        return result
+
     @app.get("/api/worklist")
     def worklist(run: str | None = None, state: str | None = None, district: str | None = None, fsu: str | None = None,
                  tier: str = Query("A", pattern="^(A|B|AB)$"), offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)) -> dict[str, Any]:
@@ -691,7 +766,7 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
             return {"inputs": [], "stages": [], "can_start": False, "review_only": True, "reason": REVIEW_ONLY_REASON,
                     "upload": {"available": False, "reason": REVIEW_ONLY_REASON}}
         return {"inputs": jobs.inputs(), "stages": ["peer", "statistical", "contextual", "ml", "pattern", "historical", "integrity", "fusion"],
-                "can_start": not users or (user is not None and user["role"] in ROLES_THAT_RUN_BATCH),
+                "can_start": auth is None or can(user, "run"),
                 "upload": {"available": False, "reason": "Survey files are prepared on the server (python -m mospi.pipeline.stages.preprocessing.cli ...), which checks the "
                                                          "release layout, before they can be validated here. Uploading raw files from the browser is not offered."}}
 
@@ -754,11 +829,11 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
                      review_status: str | None = None, strong_source: str | None = None, tier: str | None = None, lane: str | None = None,
                      case_level: str | None = None, district: str | None = None, request: Request = None) -> StreamingResponse:
         """Stream the complete filtered list as CSV (no truncation), in priority order.  Logged in the audit trail."""
-        if audit_read_only:   # every export is logged; without a durable audit store it is not offered
-            raise HTTPException(503, AUDIT_READ_ONLY_REASON)
+        if not exports:   # every export is logged; it is offered only where the audit store takes that entry
+            raise HTTPException(503, AUDIT_READ_ONLY_REASON if audit_read_only and not hosted else EXPORT_REASON)
         directory = repository.path(run)
         user = getattr(request.state, "user", None) if request is not None else None
-        if users and (user is None or user["role"] not in ROLES_THAT_EXPORT):
+        if auth is not None and not can(user, "export"):
             raise HTTPException(403, "Your role cannot export case lists.")
         filters = queue_filters(priority_band=priority_band, state=state, sector=sector, stratum=stratum, fsu=fsu, release=release,
                                 visit=visit, month=month, evidence_source=evidence_source, review_status=review_status, strong_source=strong_source,
@@ -795,7 +870,7 @@ def create_app(fusion_root: Path | None = None, project_root: Path | None = None
     # ---------------------------------------------------------------- upload & validate, jobs, checks, alerts (PostgreSQL)
 
     from .operations_api import register as register_operations
-    register_operations(app, operations=operations, users=users, review_only=review_only)
+    register_operations(app, operations=operations, signed_in=auth is not None, review_only=review_only)
 
     @app.get("/healthz", include_in_schema=False)
     def health() -> JSONResponse:

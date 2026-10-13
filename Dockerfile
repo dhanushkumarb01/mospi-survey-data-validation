@@ -26,9 +26,9 @@ RUN --mount=type=secret,id=extra_ca     if [ -s /run/secrets/extra_ca ]; then   
 COPY mospi/ mospi/
 COPY scripts/ scripts/
 
-# Unprivileged runtime user; /data is supplied by bind mounts.
+# Unprivileged runtime user; /data is supplied by bind mounts, /data/auth (user accounts) by a named volume.
 RUN groupadd --gid 10001 mospi && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin mospi \
-    && mkdir -p /data && chown mospi:mospi /data
+    && mkdir -p /data/auth && chown -R mospi:mospi /data
 USER 10001:10001
 
 ENV HOME=/tmp \
@@ -36,7 +36,8 @@ ENV HOME=/tmp \
     MOSPI_HOST=0.0.0.0 \
     MOSPI_PORT=8000 \
     MOSPI_FUSION_ROOT=/data/fusion/runs \
-    MOSPI_PROJECT_ROOT=/data     MOSPI_CODE_VERSION=$MOSPI_CODE_VERSION
+    MOSPI_PROJECT_ROOT=/data \
+    MOSPI_USERS_DB=/data/auth/users.sqlite     MOSPI_CODE_VERSION=$MOSPI_CODE_VERSION
 
 EXPOSE 8000
 

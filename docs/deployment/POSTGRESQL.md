@@ -78,7 +78,7 @@ Vercel; read by tests only with `--postgres`). Placeholders are in `.env.example
 | `MOSPI_DB_CA_FILE` | all | `deploy/supabase/prod-ca-2021.crt`: Supabase Root 2021 CA (public). Its SHA-256 fingerprint `80:70:25:AD:…:CA:FA` was checked against both the chain the pooler presents and Supabase's published file. |
 | `MOSPI_DB_APP_PASSWORD`, `MOSPI_DB_READER_PASSWORD` | `migrate --roles` | generated 32-character passwords (in `.env` only) |
 | `MOSPI_AUDIT_BACKEND` | app | `sqlite` (local default) or `postgres` (Vercel; locally when chosen) |
-| `MOSPI_USERS_JSON` (Vercel), `MOSPI_HOSTED_USERS_JSON` (local copy) | hosted sign-in | SHA-256 hashes of the access tokens; tokens are never stored in the repository |
+| `MOSPI_SESSION_SECRET` | signs session cookies | 32+ random characters; a separate value on Vercel. Accounts are in `app_users` ([USER_ACCOUNTS.md](USER_ACCOUNTS.md)) |
 | `MOSPI_DB_MAX_CONNECTIONS` (5; 3 on Vercel), `MOSPI_DB_CONNECT_TIMEOUT` (5 s), `MOSPI_DB_STATEMENT_TIMEOUT_MS` (15000) | all | bounded pool and timeouts |
 | `MOSPI_SERVING_DIR` | hosted | where the serving set is materialised (default `<tmp>/mospi-serving`) |
 | `MOSPI_KEY_HMAC_SECRET`, `MOSPI_UPLOAD_*`, `MOSPI_CHECK_INTERVAL_MINUTES`, `MOSPI_RERUN_ON_CHANGE`, `MOSPI_FULL_RERUN_DAYS`, `MOSPI_JOB_STALE_SECONDS` | local uploads and worker | as before (docs in §7) |
@@ -210,7 +210,7 @@ audit migration, the backup drill, uploads and the worker.
 ## 11. Teardown after the week, and rollback
 
 1. Vercel: remove the production deployment or the project (`vercel remove mospi-survey-data-validation` or Project Settings →
-   Delete), or at least delete the `MOSPI_DATABASE_URL` and `MOSPI_USERS_JSON` environment variables and redeploy.
+   Delete), or at least delete the `MOSPI_DATABASE_URL` and `MOSPI_SESSION_SECRET` environment variables and redeploy.
 2. Supabase: take a final backup (`python -m mospi.db.backup create`), then remove the hosted data
    (`python -m mospi.db.serving remove --run 2024_first_visit_v2_2`), and pause or delete the project
    (Dashboard → Project Settings → General → Pause project / Delete project). Deleting removes every copy of the hosted data.

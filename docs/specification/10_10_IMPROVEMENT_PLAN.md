@@ -4,7 +4,7 @@
 **Date:** 8 October 2026.
 **Primary authority:** *A brief note from HSD, NSO, MoSPI*, "the brief".
 **Secondary:** *Research & Technical Documentation v1.0*, "the research document"; it elaborates the brief but does not add requirements.
-**Baseline:** [`FINAL_EVALUATION_AGAINST_PROBLEM_STATEMENT.md`](FINAL_EVALUATION_AGAINST_PROBLEM_STATEMENT.md) (5.5/10), "the 5.5 evaluation".
+**Baseline:** the earlier strict evaluation against the problem statement (5.5/10), "the 5.5 evaluation" (retired; kept in git history).
 
 **How this plan was produced.** The code was read stage by stage. Every number below comes from one of three sources:
 * the stored runs, queried read-only;

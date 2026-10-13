@@ -1,8 +1,6 @@
 """PostgreSQL fixtures: every test runs in its own throwaway schema (never the operational ``mospi`` schema)."""
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import uuid
 
@@ -11,12 +9,7 @@ import pytest
 from mospi.db.config import load_env_file
 from mospi.db.connection import Database
 
-TOKENS = {"admin": "admin-token-for-tests", "technical": "technical-token-for-tests", "supervisor": "supervisor-token-for-tests"}
-USERS = json.dumps({"users": [{"name": f"Test {role}", "role": role, "token_sha256": hashlib.sha256(token.encode()).hexdigest()} for role, token in TOKENS.items()]})
-
-
-def auth(role: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {TOKENS[role]}"}
+from tests.auth_support import SECRET, auth, seed_postgres, signed_in  # noqa: F401 - re-exported for the PostgreSQL tests
 
 
 def _urls() -> dict[str, str]:

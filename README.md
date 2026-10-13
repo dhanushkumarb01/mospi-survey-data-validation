@@ -4,7 +4,7 @@ A local, open-source evidence and review workspace for validating Periodic Labou
 
 > **Naming.** The application presents itself as the MoSPI survey data validation platform; the UI footer carries "Powered by INNODATATICS". Runs stored before the rename hold columns prefixed `iospi_*`; current code writes `MoSPI_*`. Both are read through `mospi/survey_rules/schema.py`, which aliases legacy names at read time and never rewrites a stored run.
 
-**Read first:** [docs/specification/10_10_IMPROVEMENT_PLAN.md](docs/specification/10_10_IMPROVEMENT_PLAN.md) — the scientific audit and the specification this version implements, with an implementation-status section at the top. The earlier strict evaluation, [docs/specification/FINAL_EVALUATION_AGAINST_PROBLEM_STATEMENT.md](docs/specification/FINAL_EVALUATION_AGAINST_PROBLEM_STATEMENT.md), describes the superseded V2.0 priority.
+**Start here:** [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) explains what the platform does and how to use it, step by step. [docs/TECHNICAL_DOCUMENTATION.md](docs/TECHNICAL_DOCUMENTATION.md) describes the architecture, every stage, the data, the APIs, deployment and testing. The method specification and its implementation status are in [docs/specification/10_10_IMPROVEMENT_PLAN.md](docs/specification/10_10_IMPROVEMENT_PLAN.md).
 
 ## Architecture (V2, current method)
 
@@ -55,7 +55,7 @@ deploy/           build-time placeholder for the optional proxy CA
 Dockerfile, docker-compose*.yml, vercel.json, pyproject.toml, requirements*.txt, conftest.py stay at the root (tooling discovers them there)
 ```
 
-The data root is `data/`; `MOSPI_DATA_DIR` points the code elsewhere (`mospi/paths.py`). Where this repository's history refers to the former top-level folders (`fusion/`, `ml/`, `runs` beside the code, ...), [docs/REORGANIZATION.md](docs/REORGANIZATION.md) gives the old-to-new path map.
+The data root is `data/`; `MOSPI_DATA_DIR` points the code elsewhere (`mospi/paths.py`).
 
 ## Run with Docker (recommended)
 
@@ -87,9 +87,9 @@ python -m mospi.evaluation.run --release 2024 --seeds 1-5 --fold A   # protocol 
 python -m mospi.app.serve --fusion-root data/fusion/runs       # http://127.0.0.1:8000
 ```
 
-Batches can also be started and followed from the workspace (**Batch validation** page; `/api/batch`), for the prepared releases on the server; uploading raw files is not offered. With authentication on, only an `admin` can start one.
+Batches can also be started and followed from the workspace (**Batch validation** page; `/api/batch`), for the prepared releases on the server; uploading raw files is not offered. Only an administrator can start one.
 
-Optional authentication: `python -m mospi.app.serve --users-file users.json`, where the file is `{"users": [{"name": "...", "role": "supervisor|technical|admin", "token_sha256": "<sha256 of the token>"}]}`. Without it, the server refuses to listen beyond 127.0.0.1.
+Sign-in is always required. There are three roles: administrator, supervisor and analyst. Create the first administrator on the server with `python -m mospi.auth create-admin --username admin --name "Full Name"`. Administrators then create supervisor and analyst accounts on the **Users** page ([docs/deployment/USER_ACCOUNTS.md](docs/deployment/USER_ACCOUNTS.md)).
 
 ## Status of each capability
 
@@ -108,13 +108,14 @@ Status words: **Validated** (checked against documents or data), **Implemented, 
 | Area indicators with design-based SEs, known-events calendar | Implemented, not evaluated; calendar empty until HSD supplies events |
 | Decision taxonomy, reason codes, time on case, hash-chained audit, feedback report | Implemented and tested |
 | Evaluation instrument (catalogue v2, CAPI-pass metrics, seeds/folds, `--verify`) | Implemented; **the campaign has not been run** |
-| Real-time ingestion API, scheduler, PostgreSQL stores | Later stage (not implemented) |
+| Upload & validate, validation worker, periodic integrity checks, PostgreSQL operational store | Implemented and tested (`--postgres` suite on Supabase); file upload, not a real-time eSigma feed |
+| Hosted review-only instance (Vercel + Supabase) | Deployed 12 Oct 2026 for PLFS 2024 first visit; decisions recorded locally only |
 | eSigma integration | Later stage; boundary and open questions in `docs/specification/ESIGMA_INTEGRATION_ROADMAP.md` |
 | Related-survey validation | Not possible with current data (no approved related dataset) |
 | Enumerator analytics | Not possible with current data (no investigator code in the released files) |
 | Same-month-previous-year comparison for 2025 | Not possible with current data (needs 2026 releases) |
 | Real-world precision and miss rate | Needs the HSD pilot with pre-scrutiny data (gate G1) |
-| Local token authentication | Prototype; not a GoI-approved identity system |
+| Password sign-in with three roles | Prototype; not a GoI-approved identity system |
 
 ## Tests
 
